@@ -260,34 +260,34 @@ func (t TypeRef) Resolve() *Object {
 			Value: enumType.EnumValues[0],
 		}
 	case kindScalar:
-		obj := Object{
+		return &Object{
 			Name: t.String(),
 			Type: t,
+			Value: func(name string) interface{} {
+				randInt := rand.Intn(500)
+				switch t.Name {
+				case typeBool:
+					return randInt%2 == 0
+				case typeInt:
+					return randInt
+				case typeString:
+					return fmt.Sprintf("%s string", name)
+				case typeID:
+					return uuid.New().String()
+				case typeURI:
+					return fmt.Sprintf("https://example.com/%s", name)
+				case typeDateTime:
+					return time.Now()
+				case typeHTML:
+					return fmt.Sprintf("<html><body><h1>%s</h1></body></html>", name)
+				case typeFloat:
+					return rand.Float64() * float64(randInt)
+				default: // Make configurable
+					fmt.Printf("[!] No default value for scalar %s\n", t.Name)
+					return fmt.Sprintf("unknown %s", name)
+				}
+			},
 		}
-
-		switch t.Name {
-		case typeBool:
-			obj.Value = false
-		case typeInt:
-			obj.Value = 1
-		case typeString:
-			obj.Value = "default string"
-		case typeID:
-			obj.Value = uuid.New().String()
-		case typeURI:
-			obj.Value = "https://example.com"
-		case typeDateTime:
-			obj.Value = time.Now()
-		case typeHTML:
-			obj.Value = "<html><body><h1>Example</h1></body></html>"
-		case typeFloat:
-			obj.Value = rand.Float64() * 2
-		default: // Make configurable
-			fmt.Printf("[!] No default value for scalar %s\n", t.Name)
-			obj.Value = "unknown"
-		}
-
-		return &obj
 	case kindObject:
 		objType, ok := typeMap[t.Name]
 		if !ok {
@@ -415,6 +415,8 @@ func (o *Object) GenValue() interface{} {
 		return values
 	case EnumValue:
 		return v.Name
+	case func(string) interface{}:
+		return v(o.Name)
 	default:
 		return v
 	}
