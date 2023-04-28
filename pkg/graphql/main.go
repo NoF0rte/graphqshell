@@ -1,7 +1,9 @@
 package graphql
 
 import (
+	"encoding/json"
 	"fmt"
+	"math/rand"
 	"time"
 
 	"github.com/emirpasic/gods/stacks/arraystack"
@@ -24,24 +26,44 @@ const (
 	typeURI      string = "URI"
 	typeDateTime string = "DateTime"
 	typeHTML     string = "HTML"
+	typeFloat    string = "Float"
 )
 
 var (
-	typeMap      map[string]FullType        = make(map[string]FullType)
-	objCache     map[string]*Object         = make(map[string]*Object)
-	deferResolve map[string][]func(*Object) = make(map[string][]func(*Object))
-	resolveStack *arraystack.Stack          = arraystack.New()
+	typeMap      map[string]FullType            = make(map[string]FullType)
+	objCache     map[string]*Object             = make(map[string]*Object)
+	valCache     map[string]interface{}         = make(map[string]interface{})
+	deferResolve map[string][]func(interface{}) = make(map[string][]func(interface{}))
+	resolveStack *arraystack.Stack              = arraystack.New()
 )
 
-func getOrCreateObj(ref *TypeRef) *Object {
+func getOrResolveObj(ref *TypeRef) *Object {
+	if ref.IsScalar() {
+		return ref.Resolve()
+	}
+
 	fqName := ref.String()
 	obj, ok := objCache[fqName]
 	if !ok {
-		obj = ref.Create()
+		obj = ref.Resolve()
 		objCache[fqName] = obj
 	}
 
 	return obj
+}
+
+func getOrGenValue(obj *Object) interface{} {
+	if obj.Type.IsScalar() {
+		return obj.GenValue()
+	}
+
+	val, ok := valCache[obj.Name]
+	if !ok {
+		val = obj.GenValue()
+		valCache[obj.Name] = val
+	}
+
+	return val
 }
 
 func isResolving(name string) bool {
@@ -90,12 +112,16 @@ type Field struct {
 	Type              *TypeRef     `json:"type"`
 }
 
-func (f Field) Create() *Object {
+func (f Field) Resolve() *Object {
 	var obj *Object
-	found := getOrCreateObj(f.Type)
+	found := getOrResolveObj(f.Type)
 	if found != nil {
 		obj = found.Copy()
 		obj.Name = f.Name
+	}
+
+	for _, arg := range f.Args {
+		obj.Args = append(obj.Args, arg.Resolve())
 	}
 
 	return obj
@@ -113,6 +139,17 @@ type InputValue struct {
 	Description  string      `json:"description"`
 	Name         string      `json:"name"`
 	Type         *TypeRef    `json:"type"`
+}
+
+func (v InputValue) Resolve() *Object {
+	var obj *Object
+	found := getOrResolveObj(v.Type)
+	if found != nil {
+		obj = found.Copy()
+		obj.Name = v.Name
+	}
+
+	return obj
 }
 
 type TypeRef struct {
@@ -157,15 +194,23 @@ func (t TypeRef) RootName() string {
 	return t.OfType.RootName()
 }
 
-func (t TypeRef) Create() *Object {
+func (t TypeRef) IsScalar() bool {
+	if t.OfType == nil {
+		return t.Kind == kindScalar
+	}
+
+	return t.OfType.IsScalar()
+}
+
+func (t TypeRef) Resolve() *Object {
 	switch t.Kind {
 	case kindNonNull:
 		// check stack?
-		return getOrCreateObj(t.OfType)
+		return getOrResolveObj(t.OfType)
 	case kindList:
 		// check stack?
 		var value []*Object
-		obj := getOrCreateObj(t.OfType)
+		obj := getOrResolveObj(t.OfType)
 		if obj == nil {
 			return nil
 		}
@@ -173,6 +218,7 @@ func (t TypeRef) Create() *Object {
 		value = append(value, obj)
 		return &Object{
 			Name:  t.String(),
+			Type:  t,
 			Value: value,
 		}
 	case kindInputObject:
@@ -191,7 +237,7 @@ func (t TypeRef) Create() *Object {
 
 			if field.Value == nil {
 				// check stack
-				field.Value = getOrCreateObj(inputField.Type)
+				field.Value = getOrResolveObj(inputField.Type)
 			}
 
 			fields = append(fields, &field)
@@ -199,6 +245,7 @@ func (t TypeRef) Create() *Object {
 
 		return &Object{
 			Name:   t.Name,
+			Type:   t,
 			Fields: fields,
 		}
 	case kindEnum:
@@ -209,11 +256,13 @@ func (t TypeRef) Create() *Object {
 
 		return &Object{
 			Name:  t.String(),
+			Type:  t,
 			Value: enumType.EnumValues[0],
 		}
 	case kindScalar:
 		obj := Object{
 			Name: t.String(),
+			Type: t,
 		}
 
 		switch t.Name {
@@ -231,8 +280,11 @@ func (t TypeRef) Create() *Object {
 			obj.Value = time.Now()
 		case typeHTML:
 			obj.Value = "<html><body><h1>Example</h1></body></html>"
+		case typeFloat:
+			obj.Value = rand.Float64() * 2
 		default: // Make configurable
 			fmt.Printf("[!] No default value for scalar %s\n", t.Name)
+			obj.Value = "unknown"
 		}
 
 		return &obj
@@ -246,6 +298,7 @@ func (t TypeRef) Create() *Object {
 
 		obj := &Object{
 			Name:   t.Name,
+			Type:   t,
 			Fields: make([]*Object, 0),
 		}
 
@@ -253,14 +306,16 @@ func (t TypeRef) Create() *Object {
 			rootTypeName := f.Type.RootName()
 			if isResolving(rootTypeName) {
 				fmt.Printf("[+] [%s] Deferring field %s: %s\n", t.Name, f.Name, rootTypeName)
-				deferResolve[rootTypeName] = append(deferResolve[rootTypeName], func(o *Object) {
-					obj.Fields = append(obj.Fields, o)
+				deferResolve[rootTypeName] = append(deferResolve[rootTypeName], func(o interface{}) {
+					copied := o.(*Object).Copy()
+					copied.Name = f.Name
+					obj.Fields = append(obj.Fields, copied)
 				})
 				continue
 			}
 
 			fmt.Printf("[+] [%s] Creating field %s: %s\n", t.Name, f.Name, rootTypeName)
-			fieldObj := f.Create()
+			fieldObj := f.Resolve()
 			if fieldObj != nil {
 				obj.Fields = append(obj.Fields, fieldObj)
 			}
@@ -296,6 +351,7 @@ type Query struct {
 
 type Object struct {
 	Name   string
+	Type   TypeRef
 	Args   []*Object
 	Fields []*Object
 	Value  interface{}
@@ -304,6 +360,7 @@ type Object struct {
 func (o *Object) Copy() *Object {
 	copied := &Object{
 		Name:   o.Name,
+		Type:   o.Type,
 		Args:   make([]*Object, len(o.Args)),
 		Fields: make([]*Object, len(o.Fields)),
 		Value:  o.Value,
@@ -316,21 +373,44 @@ func (o *Object) Copy() *Object {
 
 func (o *Object) GenValue() interface{} {
 	if o.Value == nil {
+		objRootType := o.Type.RootName()
+		resolveStack.Push(objRootType)
+
 		value := make(map[string]interface{})
 		for _, field := range o.Fields {
-			value[field.Name] = field.GenValue()
+			fieldRootType := field.Type.RootName()
+			if isResolving(fieldRootType) {
+				value[field.Name] = nil
+				// fmt.Printf("[+] [%s] Deferring field %s: %s\n", o.Name, field.Name, field.Type)
+				// deferResolve[fieldRootType] = append(deferResolve[fieldRootType], func(v interface{}) {
+				// 	value[field.Name] = v
+				// })
+				continue
+			}
+
+			fmt.Printf("[+] [%s] Creating field %s: %s\n", o.Name, field.Name, field.Type)
+			value[field.Name] = getOrGenValue(field)
 		}
+
+		resolveStack.Pop()
+
+		deferred := deferResolve[objRootType]
+		for _, fun := range deferred {
+			fun(value)
+		}
+
+		delete(deferResolve, objRootType)
 
 		return value
 	}
 
 	switch v := o.Value.(type) {
 	case *Object:
-		return v.GenValue()
+		return getOrGenValue(v)
 	case []*Object:
 		var values []interface{}
 		for _, obj := range v {
-			values = append(values, obj.GenValue())
+			values = append(values, getOrGenValue(obj))
 		}
 		return values
 	case EnumValue:
@@ -363,10 +443,13 @@ func ParseIntrospection(response IntrospectionResponse) (*RootQuery, *RootMutati
 	queryType := typeMap["Query"]
 	for _, field := range queryType.Fields {
 		fmt.Println(field.Name)
-		obj := field.Create()
+		obj := field.Resolve()
 		if obj != nil {
-			fmt.Println(obj.GenValue())
-			break
+			data, err := json.MarshalIndent(obj.GenValue(), "", "  ")
+			if err != nil {
+				panic(err)
+			}
+			fmt.Println(string(data))
 		}
 	}
 

@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	bytes, err := os.ReadFile("github_introspection.json")
+	bytes, err := os.ReadFile("yelp_introspection.json")
 	if err != nil {
 		panic(err)
 	}
