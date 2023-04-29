@@ -1,7 +1,6 @@
 package graphql
 
 import (
-	"encoding/json"
 	"fmt"
 	"math/rand"
 	"time"
@@ -35,6 +34,8 @@ var (
 	valCache     map[string]interface{}         = make(map[string]interface{})
 	deferResolve map[string][]func(interface{}) = make(map[string][]func(interface{}))
 	resolveStack *arraystack.Stack              = arraystack.New()
+
+	Debug bool = false
 )
 
 func getOrResolveObj(ref *TypeRef) *Object {
@@ -76,6 +77,22 @@ func isResolving(name string) bool {
 	return false
 }
 
+// func log(a ...interface{}) {
+// 	if !Debug {
+// 		return
+// 	}
+
+// 	fmt.Print(a...)
+// }
+
+func logf(format string, a ...interface{}) {
+	if !Debug {
+		return
+	}
+
+	fmt.Printf(format, a...)
+}
+
 type IntrospectionResponse struct {
 	Data struct {
 		Schema Schema `json:"__schema"`
@@ -103,6 +120,13 @@ type FullType struct {
 	PossibleTypes []TypeRef    `json:"possibleTypes"`
 }
 
+type EnumValue struct {
+	DeprecationReason interface{} `json:"deprecationReason"`
+	Description       string      `json:"description"`
+	IsDeprecated      bool        `json:"isDeprecated"`
+	Name              string      `json:"name"`
+}
+
 type Field struct {
 	Args              []InputValue `json:"args"`
 	DeprecationReason string       `json:"deprecationReason"`
@@ -116,7 +140,7 @@ func (f Field) Resolve() *Object {
 	var obj *Object
 	found := getOrResolveObj(f.Type)
 	if found != nil {
-		obj = found.Copy()
+		obj = found.copy()
 		obj.Name = f.Name
 	}
 
@@ -125,13 +149,6 @@ func (f Field) Resolve() *Object {
 	}
 
 	return obj
-}
-
-type EnumValue struct {
-	DeprecationReason interface{} `json:"deprecationReason"`
-	Description       string      `json:"description"`
-	IsDeprecated      bool        `json:"isDeprecated"`
-	Name              string      `json:"name"`
 }
 
 type InputValue struct {
@@ -145,8 +162,14 @@ func (v InputValue) Resolve() *Object {
 	var obj *Object
 	found := getOrResolveObj(v.Type)
 	if found != nil {
-		obj = found.Copy()
+		obj = found.copy()
 		obj.Name = v.Name
+
+		if v.DefaultValue != nil {
+			obj.valFactory = func(_ string) interface{} {
+				return v.DefaultValue
+			}
+		}
 	}
 
 	return obj
@@ -209,44 +232,19 @@ func (t TypeRef) Resolve() *Object {
 		return getOrResolveObj(t.OfType)
 	case kindList:
 		// check stack?
-		var value []*Object
 		obj := getOrResolveObj(t.OfType)
 		if obj == nil {
 			return nil
 		}
 
-		value = append(value, obj)
 		return &Object{
-			Name:  t.String(),
-			Type:  t,
-			Value: value,
-		}
-	case kindInputObject:
-		var fields []*Object
-
-		objType, ok := typeMap[t.Name]
-		if !ok {
-			panic(fmt.Errorf("unknown input object type %s", t.Name))
-		}
-
-		for _, inputField := range objType.InputFields {
-			field := Object{
-				Name:  inputField.Name,
-				Value: inputField.DefaultValue,
-			}
-
-			if field.Value == nil {
-				// check stack
-				field.Value = getOrResolveObj(inputField.Type)
-			}
-
-			fields = append(fields, &field)
-		}
-
-		return &Object{
-			Name:   t.Name,
-			Type:   t,
-			Fields: fields,
+			Name: t.String(),
+			Type: t,
+			valFactory: func(_ string) interface{} {
+				return []interface{}{
+					getOrGenValue(obj),
+				}
+			},
 		}
 	case kindEnum:
 		enumType, ok := typeMap[t.Name]
@@ -255,15 +253,17 @@ func (t TypeRef) Resolve() *Object {
 		}
 
 		return &Object{
-			Name:  t.String(),
-			Type:  t,
-			Value: enumType.EnumValues[0],
+			Name: t.String(),
+			Type: t,
+			valFactory: func(_ string) interface{} {
+				return enumType.EnumValues[rand.Intn(len(enumType.EnumValues))].Name
+			},
 		}
 	case kindScalar:
 		return &Object{
 			Name: t.String(),
 			Type: t,
-			Value: func(name string) interface{} {
+			valFactory: func(name string) interface{} {
 				randInt := rand.Intn(500)
 				switch t.Name {
 				case typeBool:
@@ -283,15 +283,15 @@ func (t TypeRef) Resolve() *Object {
 				case typeFloat:
 					return rand.Float64() * float64(randInt)
 				default: // Make configurable
-					fmt.Printf("[!] No default value for scalar %s\n", t.Name)
+					logf("[!] No default value for scalar %s\n", t.Name)
 					return fmt.Sprintf("unknown %s", name)
 				}
 			},
 		}
-	case kindObject:
+	case kindObject, kindInputObject:
 		objType, ok := typeMap[t.Name]
 		if !ok {
-			panic(fmt.Errorf("unknown input object type %s", t.Name))
+			panic(fmt.Errorf("unknown object or input object type %s", t.Name))
 		}
 
 		resolveStack.Push(t.Name)
@@ -305,16 +305,42 @@ func (t TypeRef) Resolve() *Object {
 		for _, f := range objType.Fields {
 			rootTypeName := f.Type.RootName()
 			if isResolving(rootTypeName) {
-				fmt.Printf("[+] [%s] Deferring field %s: %s\n", t.Name, f.Name, rootTypeName)
+				logf("[+] [%s] Deferring field %s: %s\n", t.Name, f.Name, rootTypeName)
 				deferResolve[rootTypeName] = append(deferResolve[rootTypeName], func(o interface{}) {
-					copied := o.(*Object).Copy()
+					copied := o.(*Object).copy()
 					copied.Name = f.Name
 					obj.Fields = append(obj.Fields, copied)
 				})
 				continue
 			}
 
-			fmt.Printf("[+] [%s] Creating field %s: %s\n", t.Name, f.Name, rootTypeName)
+			logf("[+] [%s] Creating field %s: %s\n", t.Name, f.Name, rootTypeName)
+			fieldObj := f.Resolve()
+			if fieldObj != nil {
+				obj.Fields = append(obj.Fields, fieldObj)
+			}
+		}
+
+		for _, f := range objType.InputFields {
+			rootTypeName := f.Type.RootName()
+			if isResolving(rootTypeName) {
+				logf("[+] [%s] Deferring input field %s: %s\n", t.Name, f.Name, rootTypeName)
+				deferResolve[rootTypeName] = append(deferResolve[rootTypeName], func(o interface{}) {
+					copied := o.(*Object).copy()
+					copied.Name = f.Name
+
+					if f.DefaultValue != nil {
+						copied.valFactory = func(_ string) interface{} {
+							return f.DefaultValue
+						}
+					}
+
+					obj.Fields = append(obj.Fields, copied)
+				})
+				continue
+			}
+
+			logf("[+] [%s] Creating input field %s: %s\n", t.Name, f.Name, rootTypeName)
 			fieldObj := f.Resolve()
 			if fieldObj != nil {
 				obj.Fields = append(obj.Fields, fieldObj)
@@ -332,38 +358,35 @@ func (t TypeRef) Resolve() *Object {
 
 		return obj
 	default:
-		fmt.Printf("[!] Either unknown or ignored kind %s\n", t.Kind)
+		logf("[!] Either unknown or ignored kind %s\n", t.Kind)
 		return nil
 	}
 }
 
-type RootQuery struct {
-	Name   string
-	Fields []Object
-}
-
-type Query struct {
-	Name        string
-	Description string
-	Args        []InputValue
-	ReturnType  TypeRef
-}
+// type Query struct {
+// 	Name        string
+// 	Description string
+// 	Type        TypeRef
+// 	Args        []*Object
+// 	ReturnType  TypeRef
+// }
 
 type Object struct {
-	Name   string
-	Type   TypeRef
-	Args   []*Object
-	Fields []*Object
-	Value  interface{}
+	Name        string
+	Description string
+	Type        TypeRef
+	Args        []*Object
+	Fields      []*Object
+	valFactory  func(string) interface{}
 }
 
-func (o *Object) Copy() *Object {
+func (o *Object) copy() *Object {
 	copied := &Object{
-		Name:   o.Name,
-		Type:   o.Type,
-		Args:   make([]*Object, len(o.Args)),
-		Fields: make([]*Object, len(o.Fields)),
-		Value:  o.Value,
+		Name:       o.Name,
+		Type:       o.Type,
+		Args:       make([]*Object, len(o.Args)),
+		Fields:     make([]*Object, len(o.Fields)),
+		valFactory: o.valFactory,
 	}
 	copy(copied.Args, o.Args)
 	copy(copied.Fields, o.Fields)
@@ -372,7 +395,7 @@ func (o *Object) Copy() *Object {
 }
 
 func (o *Object) GenValue() interface{} {
-	if o.Value == nil {
+	if o.valFactory == nil {
 		objRootType := o.Type.RootName()
 		resolveStack.Push(objRootType)
 
@@ -380,6 +403,7 @@ func (o *Object) GenValue() interface{} {
 		for _, field := range o.Fields {
 			fieldRootType := field.Type.RootName()
 			if isResolving(fieldRootType) {
+				logf("[!] Found cycle when generating value. Setting %s.%s = nil", o.Name, field.Name)
 				value[field.Name] = nil
 				// fmt.Printf("[+] [%s] Deferring field %s: %s\n", o.Name, field.Name, field.Type)
 				// deferResolve[fieldRootType] = append(deferResolve[fieldRootType], func(v interface{}) {
@@ -388,7 +412,7 @@ func (o *Object) GenValue() interface{} {
 				continue
 			}
 
-			fmt.Printf("[+] [%s] Creating field %s: %s\n", o.Name, field.Name, field.Type)
+			logf("[+] [%s] Creating field %s: %s\n", o.Name, field.Name, field.Type)
 			value[field.Name] = getOrGenValue(field)
 		}
 
@@ -404,56 +428,93 @@ func (o *Object) GenValue() interface{} {
 		return value
 	}
 
-	switch v := o.Value.(type) {
-	case *Object:
-		return getOrGenValue(v)
-	case []*Object:
-		var values []interface{}
-		for _, obj := range v {
-			values = append(values, getOrGenValue(obj))
+	return o.valFactory(o.Name)
+
+	// switch v := o.valFactory.(type) {
+	// case *Object:
+	// 	return getOrGenValue(v)
+	// case []*Object:
+	// 	var values []interface{}
+	// 	for _, obj := range v {
+	// 		values = append(values, getOrGenValue(obj))
+	// 	}
+	// 	return values
+	// case EnumValue:
+	// 	return v.Name
+	// case func(string) interface{}:
+	// 	return v(o.Name)
+	// default:
+	// 	return v
+	// }
+}
+
+type RootQuery struct {
+	Name    string
+	Queries []*Object
+}
+
+func (q *RootQuery) Get(name string) *Object {
+	for _, query := range q.Queries {
+		if query.Name == name {
+			return query
 		}
-		return values
-	case EnumValue:
-		return v.Name
-	case func(string) interface{}:
-		return v(o.Name)
-	default:
-		return v
+	}
+	return nil
+}
+
+func newRootQuery(name string) *RootQuery {
+	t, ok := typeMap[name]
+	if !ok {
+		return nil
+	}
+
+	var queries []*Object
+	for _, field := range t.Fields {
+		// check if type is Query
+		obj := field.Resolve()
+		if obj != nil {
+			queries = append(queries, obj)
+		}
+	}
+
+	return &RootQuery{
+		Name:    name,
+		Queries: queries,
 	}
 }
 
 type RootMutation struct {
+	Name      string
+	Mutations []*Object
+}
+
+func newRootMutation(name string) *RootMutation {
+	t, ok := typeMap[name]
+	if !ok {
+		return nil
+	}
+
+	var mutations []*Object
+	for _, field := range t.Fields {
+		mutation := field.Resolve()
+		if mutation != nil {
+			mutations = append(mutations, mutation)
+		}
+	}
+
+	return &RootMutation{
+		Name:      name,
+		Mutations: mutations,
+	}
 }
 
 func ParseIntrospection(response IntrospectionResponse) (*RootQuery, *RootMutation, error) {
 	schema := response.Data.Schema
-	// root := &RootQuery{
-	// 	Name: schema.QueryType.Name,
-	// }
 
 	types := schema.Types
 	for _, t := range types {
 		typeMap[t.Name] = t
-
-		// if t.Name == "Query" {
-		// 	for _, field := range t.Fields {
-		// 		fmt.Println(field.Type.String())
-		// 	}
-		// }
 	}
 
-	queryType := typeMap["Query"]
-	for _, field := range queryType.Fields {
-		fmt.Println(field.Name)
-		obj := field.Resolve()
-		if obj != nil {
-			data, err := json.MarshalIndent(obj.GenValue(), "", "  ")
-			if err != nil {
-				panic(err)
-			}
-			fmt.Println(string(data))
-		}
-	}
-
-	return nil, nil, nil
+	return newRootQuery(schema.QueryType.Name), newRootMutation(schema.MutationType.Name), nil
 }
