@@ -3,6 +3,7 @@ package graphql
 import (
 	"fmt"
 	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/emirpasic/gods/stacks/arraystack"
@@ -17,6 +18,7 @@ const (
 	kindInputObject string = "INPUT_OBJECT"
 	kindEnum        string = "ENUM"
 	kindList        string = "LIST"
+	kindUnion       string = "UNION"
 
 	typeInt      string = "Int"
 	typeString   string = "String"
@@ -30,6 +32,7 @@ const (
 
 var (
 	typeMap      map[string]FullType            = make(map[string]FullType)
+	scalarTypes  []string                       = make([]string, 0)
 	objCache     map[string]*Object             = make(map[string]*Object)
 	valCache     map[string]interface{}         = make(map[string]interface{})
 	deferResolve map[string][]func(interface{}) = make(map[string][]func(interface{}))
@@ -76,14 +79,6 @@ func isResolving(name string) bool {
 
 	return false
 }
-
-// func log(a ...interface{}) {
-// 	if !Debug {
-// 		return
-// 	}
-
-// 	fmt.Print(a...)
-// }
 
 func logf(format string, a ...interface{}) {
 	if !Debug {
@@ -137,18 +132,22 @@ type Field struct {
 }
 
 func (f Field) Resolve() *Object {
-	var obj *Object
+	var obj Object
 	found := getOrResolveObj(f.Type)
 	if found != nil {
-		obj = found.copy()
+		obj = *found
 		obj.Name = f.Name
+
+		if f.Description != "" {
+			obj.Description = f.Description
+		}
+
+		for _, arg := range f.Args {
+			obj.Args = append(obj.Args, arg.Resolve())
+		}
 	}
 
-	for _, arg := range f.Args {
-		obj.Args = append(obj.Args, arg.Resolve())
-	}
-
-	return obj
+	return &obj
 }
 
 type InputValue struct {
@@ -159,11 +158,15 @@ type InputValue struct {
 }
 
 func (v InputValue) Resolve() *Object {
-	var obj *Object
+	var obj Object
 	found := getOrResolveObj(v.Type)
 	if found != nil {
-		obj = found.copy()
+		obj = *found
 		obj.Name = v.Name
+
+		if v.Description != "" {
+			obj.Description = v.Description
+		}
 
 		if v.DefaultValue != nil {
 			obj.valFactory = func(_ string) interface{} {
@@ -172,7 +175,7 @@ func (v InputValue) Resolve() *Object {
 		}
 	}
 
-	return obj
+	return &obj
 }
 
 type TypeRef struct {
@@ -226,37 +229,39 @@ func (t TypeRef) IsScalar() bool {
 }
 
 func (t TypeRef) Resolve() *Object {
+	objType, ok := typeMap[t.Name]
+	if !ok && t.Name != "" {
+		panic(fmt.Errorf("unknown type %s", t.Name))
+	}
+
 	switch t.Kind {
-	case kindNonNull:
-		// check stack?
-		return getOrResolveObj(t.OfType)
-	case kindList:
-		// check stack?
+	case kindNonNull, kindList:
 		obj := getOrResolveObj(t.OfType)
 		if obj == nil {
 			return nil
 		}
 
+		copied := *obj
 		return &Object{
 			Name: t.String(),
 			Type: t,
-			valFactory: func(_ string) interface{} {
-				return []interface{}{
-					getOrGenValue(obj),
+			valFactory: func(name string) interface{} {
+				copied.Name = name
+				if t.Kind == kindList {
+					return []interface{}{
+						getOrGenValue(&copied),
+					}
 				}
+
+				return getOrGenValue(&copied)
 			},
 		}
 	case kindEnum:
-		enumType, ok := typeMap[t.Name]
-		if !ok {
-			panic(fmt.Errorf("unknown enum type %s", t.Name))
-		}
-
 		return &Object{
 			Name: t.String(),
 			Type: t,
 			valFactory: func(_ string) interface{} {
-				return enumType.EnumValues[rand.Intn(len(enumType.EnumValues))].Name
+				return objType.EnumValues[rand.Intn(len(objType.EnumValues))].Name
 			},
 		}
 	case kindScalar:
@@ -265,22 +270,22 @@ func (t TypeRef) Resolve() *Object {
 			Type: t,
 			valFactory: func(name string) interface{} {
 				randInt := rand.Intn(500)
-				switch t.Name {
-				case typeBool:
+				switch {
+				case strings.Contains(t.Name, typeBool):
 					return randInt%2 == 0
-				case typeInt:
+				case strings.Contains(t.Name, typeInt):
 					return randInt
-				case typeString:
+				case strings.Contains(t.Name, typeString):
 					return fmt.Sprintf("%s string", name)
-				case typeID:
+				case strings.Contains(t.Name, typeID):
 					return uuid.New().String()
-				case typeURI:
+				case strings.Contains(t.Name, typeURI):
 					return fmt.Sprintf("https://example.com/%s", name)
-				case typeDateTime:
+				case strings.Contains(t.Name, typeDateTime):
 					return time.Now()
-				case typeHTML:
+				case strings.Contains(t.Name, typeHTML):
 					return fmt.Sprintf("<html><body><h1>%s</h1></body></html>", name)
-				case typeFloat:
+				case strings.Contains(t.Name, typeFloat):
 					return rand.Float64() * float64(randInt)
 				default: // Make configurable
 					logf("[!] No default value for scalar %s\n", t.Name)
@@ -288,18 +293,14 @@ func (t TypeRef) Resolve() *Object {
 				}
 			},
 		}
-	case kindObject, kindInputObject:
-		objType, ok := typeMap[t.Name]
-		if !ok {
-			panic(fmt.Errorf("unknown object or input object type %s", t.Name))
-		}
-
+	case kindObject, kindInputObject, kindInterface, kindUnion:
 		resolveStack.Push(t.Name)
 
 		obj := &Object{
-			Name:   t.Name,
-			Type:   t,
-			Fields: make([]*Object, 0),
+			Name:           t.Name,
+			Type:           t,
+			Fields:         make([]*Object, 0),
+			PossibleValues: make([]*Object, 0),
 		}
 
 		for _, f := range objType.Fields {
@@ -307,14 +308,15 @@ func (t TypeRef) Resolve() *Object {
 			if isResolving(rootTypeName) {
 				logf("[+] [%s] Deferring field %s: %s\n", t.Name, f.Name, rootTypeName)
 				deferResolve[rootTypeName] = append(deferResolve[rootTypeName], func(o interface{}) {
-					copied := o.(*Object).copy()
+					// copied := o.(*Object).copy()
+					copied := *o.(*Object)
 					copied.Name = f.Name
-					obj.Fields = append(obj.Fields, copied)
+					obj.Fields = append(obj.Fields, &copied)
 				})
 				continue
 			}
 
-			logf("[+] [%s] Creating field %s: %s\n", t.Name, f.Name, rootTypeName)
+			logf("[+] [%s] Resolving field %s: %s\n", t.Name, f.Name, rootTypeName)
 			fieldObj := f.Resolve()
 			if fieldObj != nil {
 				obj.Fields = append(obj.Fields, fieldObj)
@@ -326,7 +328,8 @@ func (t TypeRef) Resolve() *Object {
 			if isResolving(rootTypeName) {
 				logf("[+] [%s] Deferring input field %s: %s\n", t.Name, f.Name, rootTypeName)
 				deferResolve[rootTypeName] = append(deferResolve[rootTypeName], func(o interface{}) {
-					copied := o.(*Object).copy()
+					// copied := o.(*Object).copy()
+					copied := *o.(*Object)
 					copied.Name = f.Name
 
 					if f.DefaultValue != nil {
@@ -335,15 +338,35 @@ func (t TypeRef) Resolve() *Object {
 						}
 					}
 
-					obj.Fields = append(obj.Fields, copied)
+					obj.Fields = append(obj.Fields, &copied)
 				})
 				continue
 			}
 
-			logf("[+] [%s] Creating input field %s: %s\n", t.Name, f.Name, rootTypeName)
+			logf("[+] [%s] Resolving input field %s: %s\n", t.Name, f.Name, rootTypeName)
 			fieldObj := f.Resolve()
 			if fieldObj != nil {
 				obj.Fields = append(obj.Fields, fieldObj)
+			}
+		}
+
+		for _, possibleType := range objType.PossibleTypes {
+			rootTypeName := possibleType.RootName()
+			if isResolving(rootTypeName) {
+				logf("[+] [%s] Deferring possible type %s: %s\n", t.Name, possibleType.Name, rootTypeName)
+				deferResolve[rootTypeName] = append(deferResolve[rootTypeName], func(o interface{}) {
+					// copied := o.(*Object).copy()
+					copied := *o.(*Object)
+					copied.Name = t.Name
+					obj.PossibleValues = append(obj.PossibleValues, &copied)
+				})
+				continue
+			}
+
+			logf("[+] [%s] Resolving possible type %s: %s\n", t.Name, possibleType.Name, rootTypeName)
+			possibleObj := possibleType.Resolve()
+			if possibleObj != nil {
+				obj.PossibleValues = append(obj.PossibleValues, possibleObj)
 			}
 		}
 
@@ -363,33 +386,29 @@ func (t TypeRef) Resolve() *Object {
 	}
 }
 
-// type Query struct {
-// 	Name        string
-// 	Description string
-// 	Type        TypeRef
-// 	Args        []*Object
-// 	ReturnType  TypeRef
-// }
-
 type Object struct {
-	Name        string
-	Description string
-	Type        TypeRef
-	Args        []*Object
-	Fields      []*Object
-	valFactory  func(string) interface{}
+	Name           string
+	Description    string
+	Type           TypeRef
+	Args           []*Object
+	Fields         []*Object
+	PossibleValues []*Object
+	valFactory     func(string) interface{}
 }
 
 func (o *Object) copy() *Object {
 	copied := &Object{
-		Name:       o.Name,
-		Type:       o.Type,
-		Args:       make([]*Object, len(o.Args)),
-		Fields:     make([]*Object, len(o.Fields)),
-		valFactory: o.valFactory,
+		Name:           o.Name,
+		Description:    o.Description,
+		Type:           o.Type,
+		Args:           make([]*Object, len(o.Args)),
+		Fields:         make([]*Object, len(o.Fields)),
+		PossibleValues: make([]*Object, len(o.PossibleValues)),
+		valFactory:     o.valFactory,
 	}
 	copy(copied.Args, o.Args)
 	copy(copied.Fields, o.Fields)
+	copy(copied.PossibleValues, o.PossibleValues)
 
 	return copied
 }
@@ -399,53 +418,51 @@ func (o *Object) GenValue() interface{} {
 		objRootType := o.Type.RootName()
 		resolveStack.Push(objRootType)
 
-		value := make(map[string]interface{})
-		for _, field := range o.Fields {
-			fieldRootType := field.Type.RootName()
-			if isResolving(fieldRootType) {
-				logf("[!] Found cycle when generating value. Setting %s.%s = nil", o.Name, field.Name)
-				value[field.Name] = nil
-				// fmt.Printf("[+] [%s] Deferring field %s: %s\n", o.Name, field.Name, field.Type)
-				// deferResolve[fieldRootType] = append(deferResolve[fieldRootType], func(v interface{}) {
-				// 	value[field.Name] = v
-				// })
-				continue
+		var generated interface{}
+		if len(o.PossibleValues) != 0 && len(o.Fields) == 0 {
+			possibleVal := o.PossibleValues[rand.Intn(len(o.PossibleValues))]
+			valRootType := possibleVal.Type.RootName()
+			if isResolving(valRootType) {
+				logf("[!] Found cycle when generating value. Setting generated = nil\n")
+			} else {
+				logf("[+] [%s] Creating possible value %s: %s\n", o.Name, possibleVal.Name, possibleVal.Type)
+				generated = getOrGenValue(possibleVal)
+			}
+		} else {
+			value := make(map[string]interface{})
+
+			for _, field := range o.Fields {
+				fieldRootType := field.Type.RootName()
+				if isResolving(fieldRootType) {
+					logf("[!] Found cycle when generating value. Setting %s.%s = nil", o.Name, field.Name)
+					value[field.Name] = nil
+					// fmt.Printf("[+] [%s] Deferring field %s: %s\n", o.Name, field.Name, field.Type)
+					// deferResolve[fieldRootType] = append(deferResolve[fieldRootType], func(v interface{}) {
+					// 	value[field.Name] = v
+					// })
+					continue
+				}
+
+				logf("[+] [%s] Creating field %s: %s\n", o.Name, field.Name, field.Type)
+				value[field.Name] = getOrGenValue(field)
 			}
 
-			logf("[+] [%s] Creating field %s: %s\n", o.Name, field.Name, field.Type)
-			value[field.Name] = getOrGenValue(field)
+			generated = value
 		}
 
 		resolveStack.Pop()
 
 		deferred := deferResolve[objRootType]
 		for _, fun := range deferred {
-			fun(value)
+			fun(generated)
 		}
 
 		delete(deferResolve, objRootType)
 
-		return value
+		return generated
 	}
 
 	return o.valFactory(o.Name)
-
-	// switch v := o.valFactory.(type) {
-	// case *Object:
-	// 	return getOrGenValue(v)
-	// case []*Object:
-	// 	var values []interface{}
-	// 	for _, obj := range v {
-	// 		values = append(values, getOrGenValue(obj))
-	// 	}
-	// 	return values
-	// case EnumValue:
-	// 	return v.Name
-	// case func(string) interface{}:
-	// 	return v(o.Name)
-	// default:
-	// 	return v
-	// }
 }
 
 type RootQuery struct {
@@ -468,14 +485,25 @@ func newRootQuery(name string) *RootQuery {
 		return nil
 	}
 
+	resolveStack.Push(name)
+
 	var queries []*Object
 	for _, field := range t.Fields {
-		// check if type is Query
+		rootTypeName := field.Type.RootName()
+
+		// can only happen if the field is the RootQuery type
+		if isResolving(rootTypeName) {
+			continue
+		}
+
 		obj := field.Resolve()
 		if obj != nil {
 			queries = append(queries, obj)
 		}
 	}
+
+	resolveStack.Pop()
+	delete(deferResolve, name)
 
 	return &RootQuery{
 		Name:    name,
@@ -494,13 +522,25 @@ func newRootMutation(name string) *RootMutation {
 		return nil
 	}
 
+	resolveStack.Push(name)
+
 	var mutations []*Object
 	for _, field := range t.Fields {
+		rootTypeName := field.Type.RootName()
+
+		// can only happen if the field is the RootMutation type
+		if isResolving(rootTypeName) {
+			continue
+		}
+
 		mutation := field.Resolve()
 		if mutation != nil {
 			mutations = append(mutations, mutation)
 		}
 	}
+
+	resolveStack.Pop()
+	delete(deferResolve, name)
 
 	return &RootMutation{
 		Name:      name,
@@ -513,6 +553,10 @@ func ParseIntrospection(response IntrospectionResponse) (*RootQuery, *RootMutati
 
 	types := schema.Types
 	for _, t := range types {
+		if t.Kind == kindScalar {
+			scalarTypes = append(scalarTypes, t.Name)
+		}
+
 		typeMap[t.Name] = t
 	}
 

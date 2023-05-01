@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	bytes, err := os.ReadFile("yelp_introspection.json")
+	bytes, err := os.ReadFile("github_introspection.json")
 	if err != nil {
 		panic(err)
 	}
@@ -25,17 +25,17 @@ func main() {
 		panic(err)
 	}
 
-	fmt.Println(query.Name)
-	userQuery := query.Get("user")
-	if userQuery != nil {
-		val := userQuery.GenValue()
-		data, err := json.MarshalIndent(val, "", "  ")
-		if err != nil {
-			panic(err)
-		}
-
-		fmt.Println(string(data))
+	queryValues := make(map[string]interface{})
+	for _, q := range query.Queries {
+		queryValues[q.Name] = q.GenValue()
 	}
+
+	data, err := json.MarshalIndent(queryValues, "", "  ")
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println(string(data))
 
 	fmt.Println(mutation.Name)
 }
