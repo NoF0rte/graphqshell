@@ -1,9 +1,13 @@
 package graphql
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"math/rand"
+	"reflect"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/emirpasic/gods/stacks/arraystack"
@@ -29,6 +33,19 @@ const (
 	typeHTML     string = "HTML"
 	typeFloat    string = "Float"
 )
+
+const gqlTemplate string = `
+{{- if (isEmpty .Fields) -}}
+	{{ .Name }}
+{{- else -}}
+
+{{ .Name }} {
+{{ range .Fields -}}
+	{{ toGraphQL . | println }}
+{{- end -}}
+}
+
+{{- end -}}`
 
 var (
 	typeMap      map[string]FullType            = make(map[string]FullType)
@@ -243,8 +260,11 @@ func (t TypeRef) Resolve() *Object {
 
 		copied := *obj
 		return &Object{
-			Name: t.String(),
-			Type: t,
+			Name:           t.String(),
+			Type:           t,
+			Fields:         obj.Fields,
+			Args:           obj.Args,
+			PossibleValues: obj.PossibleValues,
 			valFactory: func(name string) interface{} {
 				copied.Name = name
 				if t.Kind == kindList {
@@ -394,6 +414,7 @@ type Object struct {
 	Fields         []*Object
 	PossibleValues []*Object
 	valFactory     func(string) interface{}
+	valOverride    interface{}
 }
 
 func (o *Object) copy() *Object {
@@ -414,6 +435,10 @@ func (o *Object) copy() *Object {
 }
 
 func (o *Object) GenValue() interface{} {
+	if o.valOverride != nil {
+		return o.valOverride
+	}
+
 	if o.valFactory == nil {
 		objRootType := o.Type.RootName()
 		resolveStack.Push(objRootType)
@@ -465,6 +490,86 @@ func (o *Object) GenValue() interface{} {
 	return o.valFactory(o.Name)
 }
 
+func (o *Object) SetValue(val interface{}) {
+	o.valOverride = val
+}
+
+func (o *Object) GetField(path string) *Object {
+	if path == "" {
+		return nil
+	}
+
+	name, remaining, _ := strings.Cut(path, ".")
+
+	for _, field := range o.Fields {
+		if field.Name == name {
+			if remaining == "" {
+				return field
+			}
+
+			return field.GetField(remaining)
+		}
+	}
+
+	return nil
+}
+
+func (o *Object) GenArgs() []interface{} {
+	var args []interface{}
+	for _, obj := range o.Args {
+		args = append(args, obj.GenValue())
+	}
+
+	return args
+}
+
+func (o *Object) GenArg(name string) interface{} {
+	for _, obj := range o.Args {
+		if obj.Name == name {
+			return obj.GenValue()
+		}
+	}
+	return nil
+}
+
+func (o *Object) ToGraphQL() (string, error) {
+	funcMap := template.FuncMap{
+		"isEmpty": func(slice interface{}) bool {
+			tp := reflect.TypeOf(slice).Kind()
+			switch tp {
+			case reflect.Slice, reflect.Array:
+				l2 := reflect.ValueOf(slice)
+				return l2.Len() == 0
+			default:
+				return false
+			}
+		},
+		"toGraphQL": func(obj *Object) (string, error) {
+			output, err := obj.ToGraphQL()
+			if err != nil {
+				return "", nil
+			}
+
+			// Indent once
+			pad := strings.Repeat("\t", 1)
+			return pad + strings.Replace(output, "\n", "\n"+pad, -1), nil
+		},
+	}
+
+	t := template.Must(template.New("gql").Funcs(funcMap).Parse(gqlTemplate))
+
+	buf := new(bytes.Buffer)
+	err := t.Execute(buf, o)
+
+	if err != nil {
+		return "", errors.Join(fmt.Errorf("error on object %s:%v", o.Name, err))
+	}
+
+	output := buf.String()
+
+	return output, nil
+}
+
 type RootQuery struct {
 	Name    string
 	Queries []*Object
@@ -514,6 +619,15 @@ func newRootQuery(name string) *RootQuery {
 type RootMutation struct {
 	Name      string
 	Mutations []*Object
+}
+
+func (m *RootMutation) Get(name string) *Object {
+	for _, mutation := range m.Mutations {
+		if mutation.Name == name {
+			return mutation
+		}
+	}
+	return nil
 }
 
 func newRootMutation(name string) *RootMutation {

@@ -25,17 +25,24 @@ func main() {
 		panic(err)
 	}
 
-	queryValues := make(map[string]interface{})
-	for _, q := range query.Queries {
-		queryValues[q.Name] = q.GenValue()
-	}
-
-	data, err := json.MarshalIndent(queryValues, "", "  ")
+	output, err := query.Queries[0].ToGraphQL()
 	if err != nil {
 		panic(err)
 	}
 
-	fmt.Println(string(data))
+	fmt.Println(output)
+
+	// queryValues := make(map[string]interface{})
+	// for _, q := range query.Queries {
+	// 	queryValues[q.Name] = q.GenValue()
+	// }
+
+	// data, err := json.MarshalIndent(queryValues, "", "  ")
+	// if err != nil {
+	// 	panic(err)
+	// }
+
+	// fmt.Println(string(data))
 
 	fmt.Println(mutation.Name)
 }
