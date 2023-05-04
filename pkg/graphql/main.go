@@ -422,23 +422,6 @@ type Object struct {
 	valOverride    interface{}
 }
 
-func (o *Object) copy() *Object {
-	copied := &Object{
-		Name:           o.Name,
-		Description:    o.Description,
-		Type:           o.Type,
-		Args:           make([]*Object, len(o.Args)),
-		Fields:         make([]*Object, len(o.Fields)),
-		PossibleValues: make([]*Object, len(o.PossibleValues)),
-		valFactory:     o.valFactory,
-	}
-	copy(copied.Args, o.Args)
-	copy(copied.Fields, o.Fields)
-	copy(copied.PossibleValues, o.PossibleValues)
-
-	return copied
-}
-
 func (o *Object) GenValue() interface{} {
 	if o.valOverride != nil {
 		return o.valOverride
@@ -513,6 +496,16 @@ func (o *Object) GetField(path string) *Object {
 			}
 
 			return field.GetField(remaining)
+		}
+	}
+
+	return nil
+}
+
+func (o *Object) GetArg(name string) *Object {
+	for _, arg := range o.Args {
+		if arg.Name == name {
+			return arg
 		}
 	}
 
