@@ -2,6 +2,7 @@ package graphql
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -39,7 +40,11 @@ const gqlTemplate string = `
 	{{ .Name }}
 {{- else -}}
 
+{{- if (isEmpty .Args) -}}
 {{ .Name }} {
+{{- else -}}
+{{ .Name }}({{printArgs}}) {
+{{- end}}
 {{ range .Fields -}}
 	{{ toGraphQL . | println }}
 {{- end -}}
@@ -547,12 +552,20 @@ func (o *Object) ToGraphQL() (string, error) {
 		"toGraphQL": func(obj *Object) (string, error) {
 			output, err := obj.ToGraphQL()
 			if err != nil {
-				return "", nil
+				return "", err
 			}
 
 			// Indent once
 			pad := strings.Repeat("\t", 1)
 			return pad + strings.Replace(output, "\n", "\n"+pad, -1), nil
+		},
+		"printArgs": func() (string, error) {
+			var args []string
+			for _, a := range o.Args {
+				arg := a.ToArgStr()
+				args = append(args, arg)
+			}
+			return strings.Join(args, ", "), nil
 		},
 	}
 
@@ -568,6 +581,26 @@ func (o *Object) ToGraphQL() (string, error) {
 	output := buf.String()
 
 	return output, nil
+}
+
+func toArgStr(name string, val interface{}) string {
+	var str string
+	switch t := val.(type) {
+	case map[string]interface{}:
+		var vals []string
+		for key, value := range t {
+			vals = append(vals, toArgStr(key, value))
+		}
+		str = fmt.Sprintf("{%s}", strings.Join(vals, ", "))
+	default:
+		bytes, _ := json.Marshal(&t)
+		str = string(bytes)
+	}
+	return fmt.Sprintf("%s: %s", name, str)
+}
+
+func (o *Object) ToArgStr() string {
+	return toArgStr(o.Name, o.GenValue())
 }
 
 type RootQuery struct {
