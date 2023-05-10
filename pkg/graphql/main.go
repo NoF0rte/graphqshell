@@ -52,6 +52,19 @@ const gqlTemplate string = `
 
 {{- end -}}`
 
+const queryTemplate string = `query {{.Name}} {
+{{.Body}}
+}`
+
+const mutationTemplate string = `mutation {{.Name}} {
+{{.Body}}
+}`
+
+type bodyContext struct {
+	Name string
+	Body string
+}
+
 var (
 	typeMap      map[string]FullType            = make(map[string]FullType)
 	scalarTypes  []string                       = make([]string, 0)
@@ -62,6 +75,11 @@ var (
 
 	Debug bool = false
 )
+
+func indent(v string) string {
+	pad := strings.Repeat("\t", 1)
+	return pad + strings.Replace(v, "\n", "\n"+pad, -1)
+}
 
 func getOrResolveObj(ref *TypeRef) *Object {
 	if ref.IsScalar() {
@@ -420,6 +438,7 @@ type Object struct {
 	PossibleValues []*Object
 	valFactory     func(string) interface{}
 	valOverride    interface{}
+	template       string
 }
 
 func (o *Object) GenValue() interface{} {
@@ -549,8 +568,7 @@ func (o *Object) ToGraphQL() (string, error) {
 			}
 
 			// Indent once
-			pad := strings.Repeat("\t", 1)
-			return pad + strings.Replace(output, "\n", "\n"+pad, -1), nil
+			return indent(output), nil
 		},
 		"printArgs": func() (string, error) {
 			var args []string
@@ -572,6 +590,20 @@ func (o *Object) ToGraphQL() (string, error) {
 	}
 
 	output := buf.String()
+	if o.template != "" {
+		bodyTemplate := template.Must(template.New("body").Parse(o.template))
+
+		buf.Reset()
+		err = bodyTemplate.Execute(buf, bodyContext{
+			Name: o.Name,
+			Body: indent(output),
+		})
+		if err != nil {
+			return "", err
+		}
+
+		output = buf.String()
+	}
 
 	return output, nil
 }
@@ -629,6 +661,7 @@ func newRootQuery(name string) *RootQuery {
 
 		obj := field.Resolve()
 		if obj != nil {
+			obj.template = queryTemplate
 			queries = append(queries, obj)
 		}
 	}
@@ -675,6 +708,7 @@ func newRootMutation(name string) *RootMutation {
 
 		mutation := field.Resolve()
 		if mutation != nil {
+			mutation.template = mutationTemplate
 			mutations = append(mutations, mutation)
 		}
 	}

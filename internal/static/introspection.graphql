@@ -1,3 +1,23 @@
+query IntrospectionQuery {
+  __schema {
+    queryType {
+      name
+    }
+    mutationType {
+      name
+    }
+    types {
+      ...FullType
+    }
+    directives {
+      name
+      locations
+      args {
+        ...InputValue
+      }
+    }
+  }
+}
 fragment FullType on __Type {
   kind
   name
@@ -62,26 +82,6 @@ fragment TypeRef on __Type {
             }
           }
         }
-      }
-    }
-  }
-}
-query IntrospectionQuery {
-  __schema {
-    queryType {
-      name
-    }
-    mutationType {
-      name
-    }
-    types {
-      ...FullType
-    }
-    directives {
-      name
-      locations
-      args {
-        ...InputValue
       }
     }
   }
