@@ -12,6 +12,11 @@ import (
 	"github.com/NoF0rte/graphqshell/internal/static"
 )
 
+const (
+	jsonMIME    string = "application/json"
+	graphqlMIME string = "application/graphql"
+)
+
 type jsonWrapper struct {
 	Name      string                 `json:"operationName"`
 	Variables map[string]interface{} `json:"variables"`
@@ -61,11 +66,11 @@ func WithProxy(proxyURL string) ClientOption {
 	}
 }
 
-func WithDefaultContentType(contentType string) ClientOption {
-	return func(o *ClientOptions) {
-		o.contentType = contentType
-	}
-}
+// func WithDefaultContentType(contentType string) ClientOption {
+// 	return func(o *ClientOptions) {
+// 		o.contentType = contentType
+// 	}
+// }
 
 func NewClient(graphqlURL string, opts ...ClientOption) *Client {
 	options := &ClientOptions{
@@ -124,7 +129,7 @@ func (c *Client) SetProxy(proxyURL string) error {
 	return nil
 }
 
-func (c *Client) newRequest(url string, method string, data interface{}) (*http.Request, error) {
+func (c *Client) newRequest(url string, method string, contentType string, data interface{}) (*http.Request, error) {
 	var body io.Reader
 	if data != nil {
 		body = strings.NewReader(data.(string))
@@ -138,6 +143,8 @@ func (c *Client) newRequest(url string, method string, data interface{}) (*http.
 	for key, value := range c.options.headers {
 		request.Header.Add(key, value)
 	}
+
+	request.Header.Add("Content-Type", contentType)
 
 	return request, nil
 }
@@ -155,17 +162,33 @@ func (c *Client) PostJSON(obj *Object) (string, *http.Response, error) {
 	})
 }
 
-func (c *Client) postJSON(wrapper *jsonWrapper) (string, *http.Response, error) {
-	bytes, _ := json.Marshal(wrapper)
-	data := string(bytes)
-
-	req, err := c.newRequest(c.url, http.MethodPost, data)
+func (c *Client) PostGraphQL(obj *Object) (string, *http.Response, error) {
+	query, err := obj.ToGraphQL()
 	if err != nil {
 		return "", nil, err
 	}
 
-	req.Header.Add("Content-Type", "application/json")
+	req, err := c.newRequest(c.url, http.MethodPost, graphqlMIME, query)
+	if err != nil {
+		return "", nil, err
+	}
 
+	return c.do(req)
+}
+
+func (c *Client) postJSON(wrapper *jsonWrapper) (string, *http.Response, error) {
+	bytes, _ := json.Marshal(wrapper)
+	data := string(bytes)
+
+	req, err := c.newRequest(c.url, http.MethodPost, jsonMIME, data)
+	if err != nil {
+		return "", nil, err
+	}
+
+	return c.do(req)
+}
+
+func (c *Client) do(req *http.Request) (string, *http.Response, error) {
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return "", resp, err

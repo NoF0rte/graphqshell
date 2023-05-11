@@ -29,7 +29,14 @@ func (c *GraphQLClient) IsFalsy() bool {
 
 // CanIterate should return whether the Object can be Iterated.
 func (c *GraphQLClient) CanIterate() bool {
-	return false
+	return true
+}
+
+func (c *GraphQLClient) Iterate() tengo.Iterator {
+	immutableMap := &tengo.ImmutableMap{
+		Value: c.objectMap,
+	}
+	return immutableMap.Iterate()
 }
 
 func (c *GraphQLClient) IndexGet(index tengo.Object) (tengo.Object, error) {
@@ -103,6 +110,74 @@ func (c *GraphQLClient) setProxy(args ...tengo.Object) (tengo.Object, error) {
 	return nil, nil
 }
 
+func (c *GraphQLClient) postJSON(args ...tengo.Object) (tengo.Object, error) {
+	obj, ok := args[0].(*GraphQLObject)
+	if !ok {
+		return nil, tengo.ErrInvalidArgumentType{
+			Name:     "object",
+			Expected: "graphql-obj",
+			Found:    args[0].TypeName(),
+		}
+	}
+
+	body, _, err := c.Value.PostJSON(obj.Value)
+	if err != nil {
+		return interop.GoErrToTErr(err), nil
+	}
+
+	return &tengo.ImmutableMap{
+		Value: map[string]tengo.Object{
+			"body": &tengo.String{
+				Value: body,
+			},
+		},
+	}, nil
+}
+
+func (c *GraphQLClient) postGraphQL(args ...tengo.Object) (tengo.Object, error) {
+	obj, ok := args[0].(*GraphQLObject)
+	if !ok {
+		return nil, tengo.ErrInvalidArgumentType{
+			Name:     "object",
+			Expected: "graphql-obj",
+			Found:    args[0].TypeName(),
+		}
+	}
+
+	body, _, err := c.Value.PostGraphQL(obj.Value)
+	if err != nil {
+		return interop.GoErrToTErr(err), nil
+	}
+
+	return &tengo.ImmutableMap{
+		Value: map[string]tengo.Object{
+			"body": &tengo.String{
+				Value: body,
+			},
+		},
+	}, nil
+}
+
+func (c *GraphQLClient) sendAndParseIntrospection(args ...tengo.Object) (tengo.Object, error) {
+	query, mutation, err := c.Value.SendAndParseIntrospection()
+	if err != nil {
+		return interop.GoErrToTErr(err), nil
+	}
+
+	objMap := make(map[string]tengo.Object)
+	if query != nil {
+		objMap["root_query"] = makeGraphQLRootQuery(query)
+	}
+
+	if mutation != nil {
+		objMap["root_mutation"] = makeGraphQLRootMutation(mutation)
+	}
+
+	return &tengo.ImmutableMap{
+		Value: objMap,
+	}, nil
+}
+
 func makeGraphQLClient(client *graphql.Client) *GraphQLClient {
 	gqlClient := &GraphQLClient{
 		Value: client,
@@ -128,6 +203,18 @@ func makeGraphQLClient(client *graphql.Client) *GraphQLClient {
 		"set_proxy": &tengo.UserFunction{
 			Name:  "set_proxy",
 			Value: interop.NewCallable(gqlClient.setProxy, interop.WithExactArgs(1)),
+		},
+		"post_json": &tengo.UserFunction{
+			Name:  "post_json",
+			Value: interop.NewCallable(gqlClient.postJSON, interop.WithExactArgs(1)),
+		},
+		"post_graphql": &tengo.UserFunction{
+			Name:  "post_graphql",
+			Value: interop.NewCallable(gqlClient.postGraphQL, interop.WithExactArgs(1)),
+		},
+		"send_and_parse_introspection": &tengo.UserFunction{
+			Name:  "send_and_parse_introspection",
+			Value: gqlClient.sendAndParseIntrospection,
 		},
 	}
 

@@ -5,6 +5,7 @@ go 1.19
 require (
 	github.com/analog-substance/tengo/v2 v2.13.1
 	github.com/analog-substance/tengomod v0.0.0-20230510160920-7d21ff26e480
+	github.com/chzyer/readline v1.5.1
 	github.com/emirpasic/gods v1.18.1
 	github.com/google/uuid v1.3.0
 )

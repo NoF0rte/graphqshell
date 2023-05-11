@@ -12,6 +12,23 @@ func graphqlModule() map[string]tengo.Object {
 			Name:  "new_client",
 			Value: interop.NewCallable(newGraphQLClient, interop.WithExactArgs(1)),
 		},
+		"set_debug": &tengo.UserFunction{
+			Name: "set_debug",
+			Value: interop.NewCallable(func(args ...tengo.Object) (ret tengo.Object, err error) {
+				debug, ok := tengo.ToBool(args[0])
+				if !ok {
+					return nil, tengo.ErrInvalidArgumentType{
+						Name:     "debug",
+						Expected: "bool(compatible)",
+						Found:    args[0].TypeName(),
+					}
+				}
+
+				graphql.Debug = debug
+
+				return nil, nil
+			}, interop.WithExactArgs(1)),
+		},
 	}
 }
 
