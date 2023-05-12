@@ -105,20 +105,6 @@ func (o *GraphQLObject) setValue(args ...tengo.Object) (tengo.Object, error) {
 	return nil, nil
 }
 
-func (o *GraphQLObject) getArg(args ...tengo.Object) (tengo.Object, error) {
-	name, err := interop.TStrToGoStr(args[0], "name")
-	if err != nil {
-		return nil, err
-	}
-
-	obj := o.Value.GetArg(name)
-	if obj == nil {
-		return nil, nil
-	}
-
-	return makeGraphQLObject(obj), nil
-}
-
 func (o *GraphQLObject) genArgs(args ...tengo.Object) (tengo.Object, error) {
 	generatedArgs := o.Value.GenArgs()
 	return tengo.FromInterface(generatedArgs)
@@ -163,6 +149,26 @@ func (o *GraphQLObject) getField(arg tengo.Object) (tengo.Object, error) {
 	return makeGraphQLObject(field), nil
 }
 
+func (o *GraphQLObject) getArgs() tengo.Object {
+	return &GraphQLObjArray{
+		Value: o.Value.Args,
+	}
+}
+
+func (o *GraphQLObject) getArg(arg tengo.Object) (tengo.Object, error) {
+	name, err := interop.TStrToGoStr(arg, "name")
+	if err != nil {
+		return nil, err
+	}
+
+	argObj := o.Value.GetArg(name)
+	if argObj == nil {
+		return nil, nil
+	}
+
+	return makeGraphQLObject(argObj), nil
+}
+
 func makeGraphQLObject(obj *graphql.Object) *GraphQLObject {
 	gqlObj := &GraphQLObject{
 		Value: obj,
@@ -191,14 +197,8 @@ func makeGraphQLObject(obj *graphql.Object) *GraphQLObject {
 			Value: getAllOrSingle(gqlObj.getFields, gqlObj.getField),
 		},
 		"args": &tengo.UserFunction{
-			Name: "args",
-			Value: gqlObj.funcAROs(func() []*graphql.Object {
-				return obj.Args
-			}),
-		},
-		"get_arg": &tengo.UserFunction{
-			Name:  "get_arg",
-			Value: interop.NewCallable(gqlObj.getArg, interop.WithExactArgs(1)),
+			Name:  "args",
+			Value: getAllOrSingle(gqlObj.getArgs, gqlObj.getArg),
 		},
 		"gen_args": &tengo.UserFunction{
 			Name:  "gen_args",
