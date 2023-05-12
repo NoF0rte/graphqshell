@@ -105,20 +105,6 @@ func (o *GraphQLObject) setValue(args ...tengo.Object) (tengo.Object, error) {
 	return nil, nil
 }
 
-func (o *GraphQLObject) getField(args ...tengo.Object) (tengo.Object, error) {
-	path, err := interop.TStrToGoStr(args[0], "path")
-	if err != nil {
-		return nil, err
-	}
-
-	obj := o.Value.GetField(path)
-	if obj == nil {
-		return nil, nil
-	}
-
-	return makeGraphQLObject(obj), nil
-}
-
 func (o *GraphQLObject) getArg(args ...tengo.Object) (tengo.Object, error) {
 	name, err := interop.TStrToGoStr(args[0], "name")
 	if err != nil {
@@ -157,6 +143,26 @@ func (o *GraphQLObject) toGraphQL(args ...tengo.Object) (tengo.Object, error) {
 	return interop.GoStrToTStr(output), nil
 }
 
+func (o *GraphQLObject) getFields() tengo.Object {
+	return &GraphQLObjArray{
+		Value: o.Value.Fields,
+	}
+}
+
+func (o *GraphQLObject) getField(arg tengo.Object) (tengo.Object, error) {
+	path, err := interop.TStrToGoStr(arg, "path")
+	if err != nil {
+		return nil, err
+	}
+
+	field := o.Value.GetField(path)
+	if field == nil {
+		return nil, nil
+	}
+
+	return makeGraphQLObject(field), nil
+}
+
 func makeGraphQLObject(obj *graphql.Object) *GraphQLObject {
 	gqlObj := &GraphQLObject{
 		Value: obj,
@@ -181,14 +187,8 @@ func makeGraphQLObject(obj *graphql.Object) *GraphQLObject {
 			Value: interop.NewCallable(gqlObj.setValue, interop.WithExactArgs(1)),
 		},
 		"fields": &tengo.UserFunction{
-			Name: "fields",
-			Value: gqlObj.funcAROs(func() []*graphql.Object {
-				return obj.Fields
-			}),
-		},
-		"get_field": &tengo.UserFunction{
-			Name:  "get_field",
-			Value: interop.NewCallable(gqlObj.getField, interop.WithExactArgs(1)),
+			Name:  "fields",
+			Value: getAllOrSingle(gqlObj.getFields, gqlObj.getField),
 		},
 		"args": &tengo.UserFunction{
 			Name: "args",

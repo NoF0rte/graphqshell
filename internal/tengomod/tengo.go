@@ -62,3 +62,18 @@ func getterSetter(get func() tengo.Object, set func(tengo.Object) error) func(..
 	}
 	return interop.NewCallable(callable, interop.WithMaxArgs(1))
 }
+
+func getAllOrSingle(allFn func() tengo.Object, singleFn func(tengo.Object) (tengo.Object, error)) func(...tengo.Object) (tengo.Object, error) {
+	callable := func(args ...tengo.Object) (tengo.Object, error) {
+		if len(args) == 0 {
+			return allFn(), nil
+		}
+
+		single, err := singleFn(args[0])
+		if err != nil {
+			return interop.GoErrToTErr(err), nil
+		}
+		return single, nil
+	}
+	return interop.NewCallable(callable, interop.WithMaxArgs(1))
+}

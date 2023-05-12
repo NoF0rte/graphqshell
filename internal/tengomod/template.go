@@ -12,10 +12,21 @@ import (
 var funcMap template.FuncMap
 
 var (
-	rootSigTemplate  *template.Template
-	objSigTemplate   *template.Template
-	fieldSigTemplate *template.Template
+	rootSigTemplate          *template.Template
+	objSigTemplate           *template.Template
+	fieldSigTemplate         *template.Template
+	fieldSigWithDescTemplate *template.Template
 )
+
+func execTemplate(tpl *template.Template, context interface{}) (string, error) {
+	buf := new(bytes.Buffer)
+	err := tpl.Execute(buf, context)
+	if err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
+}
 
 func init() {
 	funcMap = template.FuncMap{
@@ -32,13 +43,7 @@ func init() {
 			return fmt.Sprintf("(%s)", strings.Join(args, ", "))
 		},
 		"fieldSignature": func(obj *graphql.Object) (string, error) {
-			buf := new(bytes.Buffer)
-			err := fieldSigTemplate.Execute(buf, obj)
-			if err != nil {
-				return "", err
-			}
-
-			return buf.String(), nil
+			return execTemplate(fieldSigWithDescTemplate, obj)
 		},
 		"indent": func(v string) string {
 			pad := strings.Repeat("\t", 1)
@@ -54,23 +59,31 @@ func init() {
 
 	rootSigTemplate = template.Must(template.New("rootSig").Funcs(funcMap).Parse(rootSigTemplateStr))
 
-	fieldSigTemplateStr := `
+	fieldSigTemplateStr := `{{.Name}}{{.Args | argSignature}}: {{.Type}}`
+
+	fieldSigTemplate = template.Must(template.New("fieldSig").Funcs(funcMap).Parse(fieldSigTemplateStr))
+
+	fieldSigWithDescTemplateStr := fmt.Sprintf(`
 {{- if ne (len .Description) 0 -}}
 	// {{ .Description | println }}
 {{- end -}}
-{{.Name}}{{.Args | argSignature}}: {{.Type}}`
+%s`, fieldSigTemplateStr)
 
-	fieldSigTemplate = template.Must(template.New("fieldSig").Funcs(funcMap).Parse(fieldSigTemplateStr))
+	fieldSigWithDescTemplate = template.Must(template.New("fieldSigWithDesc").Funcs(funcMap).Parse(fieldSigWithDescTemplateStr))
 
 	objSigTemplateStr := `
 {{- if ne (len .Description) 0 -}}
 	// {{ .Description | println }}
 {{- end -}}
+{{- if ne (len .Fields) 0 -}}
 {{.Name}}{{.Args | argSignature}} {
 	{{- range .Fields -}}
 		{{ fieldSignature . | printf "\n%s" | indent }}
 	{{- end }}
-}`
+}
+{{- else -}}
+{{ fieldSignature . }}
+{{- end -}}`
 
 	objSigTemplate = template.Must(template.New("objSig").Funcs(funcMap).Parse(objSigTemplateStr))
 }
