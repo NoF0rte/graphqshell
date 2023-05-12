@@ -100,6 +100,10 @@ func makeGraphQLRootMutation(mutation *graphql.RootMutation) *GraphQLRootMutatio
 		},
 	}
 
+	for _, obj := range mutation.Mutations {
+		objectMap[obj.Name] = makeGraphQLObject(obj)
+	}
+
 	rootMutation.objectMap = objectMap
 	return rootMutation
 }

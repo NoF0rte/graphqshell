@@ -1,6 +1,9 @@
 package tengomod
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/NoF0rte/graphqshell/pkg/graphql"
 	"github.com/analog-substance/tengo/v2"
 	"github.com/analog-substance/tengomod/interop"
@@ -18,7 +21,21 @@ func (o *GraphQLObject) TypeName() string {
 
 // String should return a string representation of the type's value.
 func (o *GraphQLObject) String() string {
-	return o.Value.Name
+	builder := strings.Builder{}
+	if o.Value.Description != "" {
+		builder.WriteString(fmt.Sprintf("// %s\n", o.Value.Description))
+	}
+
+	builder.WriteString(o.Value.Name)
+	if len(o.Value.Args) != 0 {
+		var args []string
+		for _, arg := range o.Value.Args {
+			args = append(args, fmt.Sprintf("%s: %s", arg.Name, arg.Type.String()))
+		}
+		builder.WriteString(fmt.Sprintf("(%s)", strings.Join(args, ", ")))
+	}
+	builder.WriteString(fmt.Sprintf(": %s", o.Value.Type.String()))
+	return builder.String()
 }
 
 // IsFalsy should return true if the value of the type should be considered

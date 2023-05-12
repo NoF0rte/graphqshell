@@ -100,6 +100,10 @@ func makeGraphQLRootQuery(query *graphql.RootQuery) *GraphQLRootQuery {
 		},
 	}
 
+	for _, obj := range query.Queries {
+		objectMap[obj.Name] = makeGraphQLObject(obj)
+	}
+
 	rootQuery.objectMap = objectMap
 	return rootQuery
 }

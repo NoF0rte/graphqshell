@@ -106,16 +106,42 @@ func (c *Client) SetHeaders(headers map[string]string) {
 	}
 }
 
+func (c *Client) GetHeaders() map[string]string {
+	return c.options.headers
+}
+
 func (c *Client) SetCookies(cookies string) {
 	c.options.headers["Cookie"] = cookies
 }
 
-func (c *Client) SetAuthorization(value string) {
+func (c *Client) GetCookies() string {
+	return c.options.headers["Cookie"]
+}
+
+func (c *Client) SetAuth(value string) {
 	c.options.headers["Authorization"] = value
 }
 
+func (c *Client) GetAuth() string {
+	return c.options.headers["Authorization"]
+}
+
 func (c *Client) SetBearer(token string) {
-	c.SetAuthorization(fmt.Sprintf("Bearer %s", token))
+	c.SetAuth(fmt.Sprintf("Bearer %s", token))
+}
+
+func (c *Client) GetBearer() string {
+	auth := c.GetAuth()
+	if auth == "" {
+		return ""
+	}
+
+	parts := strings.Split(auth, "Bearer ")
+	if len(parts) == 1 {
+		return parts[0]
+	}
+
+	return parts[1]
 }
 
 func (c *Client) SetProxy(proxyURL string) error {
@@ -124,9 +150,20 @@ func (c *Client) SetProxy(proxyURL string) error {
 		return err
 	}
 
+	c.options.proxy = proxyURL
+
 	c.http.Transport.(*http.Transport).Proxy = http.ProxyURL(u)
 
 	return nil
+}
+
+func (c *Client) GetProxy() string {
+	return c.options.proxy
+}
+
+func (c *Client) RemoveProxy() {
+	c.http.Transport.(*http.Transport).Proxy = nil
+	c.options.proxy = ""
 }
 
 func (c *Client) newRequest(url string, method string, contentType string, data interface{}) (*http.Request, error) {
@@ -202,7 +239,7 @@ func (c *Client) do(req *http.Request) (string, *http.Response, error) {
 	return string(body), resp, nil
 }
 
-func (c *Client) SendAndParseIntrospection() (*RootQuery, *RootMutation, error) {
+func (c *Client) Introspect() (*RootQuery, *RootMutation, error) {
 	body, _, err := c.postJSON(&jsonWrapper{
 		Name:      "IntrospectionQuery",
 		Variables: make(map[string]interface{}),

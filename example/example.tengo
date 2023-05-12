@@ -1,0 +1,10 @@
+#!/usr/bin/env graphqshell
+
+fmt := import("fmt")
+graphql := import("graphql")
+
+url := "https://countries.trevorblades.com/"
+
+client := graphql.new_client(url)
+
+fmt.println("Script ran")

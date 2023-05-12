@@ -52,62 +52,82 @@ func (c *GraphQLClient) IndexGet(index tengo.Object) (tengo.Object, error) {
 	return res, nil
 }
 
-func (c *GraphQLClient) setHeaders(args ...tengo.Object) (tengo.Object, error) {
-	headers, err := interop.TMapToGoStrMapStr(args[0], "headers")
+func (c *GraphQLClient) setHeaders(arg tengo.Object) error {
+	headers, err := interop.TMapToGoStrMapStr(arg, "headers")
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	c.Value.SetHeaders(headers)
 
-	return nil, nil
+	return nil
 }
 
-func (c *GraphQLClient) setAuthorization(args ...tengo.Object) (tengo.Object, error) {
-	auth, err := interop.TStrToGoStr(args[0], "auth")
+func (c *GraphQLClient) getHeaders() tengo.Object {
+	return interop.GoStrMapStrToTMap(c.Value.GetHeaders())
+}
+
+func (c *GraphQLClient) setAuthorization(arg tengo.Object) error {
+	auth, err := interop.TStrToGoStr(arg, "auth")
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	c.Value.SetAuthorization(auth)
+	c.Value.SetAuth(auth)
 
-	return nil, nil
+	return nil
 }
 
-func (c *GraphQLClient) setBearer(args ...tengo.Object) (tengo.Object, error) {
-	token, err := interop.TStrToGoStr(args[0], "token")
+func (c *GraphQLClient) getAuthorization() tengo.Object {
+	return interop.GoStrToTStr(c.Value.GetAuth())
+}
+
+func (c *GraphQLClient) setBearer(arg tengo.Object) error {
+	token, err := interop.TStrToGoStr(arg, "token")
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	c.Value.SetBearer(token)
 
-	return nil, nil
+	return nil
 }
 
-func (c *GraphQLClient) setCookies(args ...tengo.Object) (tengo.Object, error) {
-	cookies, err := interop.TStrToGoStr(args[0], "cookies")
+func (c *GraphQLClient) getBearer() tengo.Object {
+	return interop.GoStrToTStr(c.Value.GetBearer())
+}
+
+func (c *GraphQLClient) setCookies(arg tengo.Object) error {
+	cookies, err := interop.TStrToGoStr(arg, "cookies")
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	c.Value.SetCookies(cookies)
 
-	return nil, nil
+	return nil
 }
 
-func (c *GraphQLClient) setProxy(args ...tengo.Object) (tengo.Object, error) {
-	proxyURL, err := interop.TStrToGoStr(args[0], "url")
+func (c *GraphQLClient) getCookies() tengo.Object {
+	return interop.GoStrToTStr(c.Value.GetCookies())
+}
+
+func (c *GraphQLClient) setProxy(arg tengo.Object) error {
+	proxyURL, err := interop.TStrToGoStr(arg, "url")
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	err = c.Value.SetProxy(proxyURL)
 	if err != nil {
-		return interop.GoErrToTErr(err), nil
+		return err
 	}
 
-	return nil, nil
+	return nil
+}
+
+func (c *GraphQLClient) getProxy() tengo.Object {
+	return interop.GoStrToTStr(c.Value.GetProxy())
 }
 
 func (c *GraphQLClient) postJSON(args ...tengo.Object) (tengo.Object, error) {
@@ -158,19 +178,19 @@ func (c *GraphQLClient) postGraphQL(args ...tengo.Object) (tengo.Object, error) 
 	}, nil
 }
 
-func (c *GraphQLClient) sendAndParseIntrospection(args ...tengo.Object) (tengo.Object, error) {
-	query, mutation, err := c.Value.SendAndParseIntrospection()
+func (c *GraphQLClient) introspect(args ...tengo.Object) (tengo.Object, error) {
+	query, mutation, err := c.Value.Introspect()
 	if err != nil {
 		return interop.GoErrToTErr(err), nil
 	}
 
 	objMap := make(map[string]tengo.Object)
 	if query != nil {
-		objMap["root_query"] = makeGraphQLRootQuery(query)
+		objMap["query"] = makeGraphQLRootQuery(query)
 	}
 
 	if mutation != nil {
-		objMap["root_mutation"] = makeGraphQLRootMutation(mutation)
+		objMap["mutation"] = makeGraphQLRootMutation(mutation)
 	}
 
 	return &tengo.ImmutableMap{
@@ -184,25 +204,25 @@ func makeGraphQLClient(client *graphql.Client) *GraphQLClient {
 	}
 
 	objectMap := map[string]tengo.Object{
-		"set_headers": &tengo.UserFunction{
-			Name:  "set_headers",
-			Value: interop.NewCallable(gqlClient.setHeaders, interop.WithExactArgs(1)),
+		"headers": &tengo.UserFunction{
+			Name:  "headers",
+			Value: getterSetter(gqlClient.getHeaders, gqlClient.setHeaders),
 		},
-		"set_authorization": &tengo.UserFunction{
-			Name:  "set_authorization",
-			Value: interop.NewCallable(gqlClient.setAuthorization, interop.WithExactArgs(1)),
+		"auth": &tengo.UserFunction{
+			Name:  "auth",
+			Value: getterSetter(gqlClient.getAuthorization, gqlClient.setAuthorization),
 		},
-		"set_bearer": &tengo.UserFunction{
-			Name:  "set_bearer",
-			Value: interop.NewCallable(gqlClient.setBearer, interop.WithExactArgs(1)),
+		"bearer": &tengo.UserFunction{
+			Name:  "bearer",
+			Value: getterSetter(gqlClient.getBearer, gqlClient.setBearer),
 		},
-		"set_cookies": &tengo.UserFunction{
-			Name:  "set_cookies",
-			Value: interop.NewCallable(gqlClient.setCookies, interop.WithExactArgs(1)),
+		"cookies": &tengo.UserFunction{
+			Name:  "cookies",
+			Value: getterSetter(gqlClient.getCookies, gqlClient.setCookies),
 		},
-		"set_proxy": &tengo.UserFunction{
-			Name:  "set_proxy",
-			Value: interop.NewCallable(gqlClient.setProxy, interop.WithExactArgs(1)),
+		"proxy": &tengo.UserFunction{
+			Name:  "proxy",
+			Value: getterSetter(gqlClient.getProxy, gqlClient.setProxy),
 		},
 		"post_json": &tengo.UserFunction{
 			Name:  "post_json",
@@ -212,9 +232,9 @@ func makeGraphQLClient(client *graphql.Client) *GraphQLClient {
 			Name:  "post_graphql",
 			Value: interop.NewCallable(gqlClient.postGraphQL, interop.WithExactArgs(1)),
 		},
-		"send_and_parse_introspection": &tengo.UserFunction{
-			Name:  "send_and_parse_introspection",
-			Value: gqlClient.sendAndParseIntrospection,
+		"introspect": &tengo.UserFunction{
+			Name:  "introspect",
+			Value: gqlClient.introspect,
 		},
 	}
 
