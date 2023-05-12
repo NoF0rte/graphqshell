@@ -1,6 +1,8 @@
 package tengomod
 
 import (
+	"bytes"
+
 	"github.com/NoF0rte/graphqshell/pkg/graphql"
 	"github.com/analog-substance/tengo/v2"
 	"github.com/analog-substance/tengomod/interop"
@@ -18,7 +20,21 @@ func (m *GraphQLRootMutation) TypeName() string {
 
 // String should return a string representation of the type's value.
 func (m *GraphQLRootMutation) String() string {
-	return m.Value.Name
+	context := struct {
+		Name  string
+		Items []*graphql.Object
+	}{
+		Name:  m.Value.Name,
+		Items: m.Value.Mutations,
+	}
+
+	buf := new(bytes.Buffer)
+	err := rootSigTemplate.Execute(buf, context)
+	if err != nil {
+		return "error ocurred during template execution"
+	}
+
+	return buf.String()
 }
 
 // IsFalsy should return true if the value of the type should be considered

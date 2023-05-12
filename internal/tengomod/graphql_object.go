@@ -1,8 +1,7 @@
 package tengomod
 
 import (
-	"fmt"
-	"strings"
+	"bytes"
 
 	"github.com/NoF0rte/graphqshell/pkg/graphql"
 	"github.com/analog-substance/tengo/v2"
@@ -21,21 +20,13 @@ func (o *GraphQLObject) TypeName() string {
 
 // String should return a string representation of the type's value.
 func (o *GraphQLObject) String() string {
-	builder := strings.Builder{}
-	if o.Value.Description != "" {
-		builder.WriteString(fmt.Sprintf("// %s\n", o.Value.Description))
+	buf := new(bytes.Buffer)
+	err := objSigTemplate.Execute(buf, o.Value)
+	if err != nil {
+		return "error ocurred during template execution"
 	}
 
-	builder.WriteString(o.Value.Name)
-	if len(o.Value.Args) != 0 {
-		var args []string
-		for _, arg := range o.Value.Args {
-			args = append(args, fmt.Sprintf("%s: %s", arg.Name, arg.Type.String()))
-		}
-		builder.WriteString(fmt.Sprintf("(%s)", strings.Join(args, ", ")))
-	}
-	builder.WriteString(fmt.Sprintf(": %s", o.Value.Type.String()))
-	return builder.String()
+	return buf.String()
 }
 
 // IsFalsy should return true if the value of the type should be considered
@@ -67,6 +58,27 @@ func (o *GraphQLObject) IndexGet(index tengo.Object) (tengo.Object, error) {
 		res = tengo.UndefinedValue
 	}
 	return res, nil
+}
+
+func (o *GraphQLObject) IndexSet(index tengo.Object, val tengo.Object) error {
+	strIdx, ok := tengo.ToString(index)
+	if !ok {
+		return tengo.ErrInvalidIndexType
+	}
+
+	if strIdx != "description" {
+		return tengo.ErrInvalidIndexOnError
+	}
+
+	value, ok := tengo.ToString(val)
+	if !ok {
+		return tengo.ErrInvalidIndexValueType
+	}
+
+	o.Value.Description = value
+	o.objectMap[strIdx] = val
+
+	return nil
 }
 
 func (o *GraphQLObject) funcAROs(fn func() []*graphql.Object) func(...tengo.Object) (tengo.Object, error) {
