@@ -1,6 +1,8 @@
 package tengomod
 
 import (
+	"encoding/json"
+
 	"github.com/NoF0rte/graphqshell/pkg/graphql"
 	"github.com/analog-substance/tengo/v2"
 	"github.com/analog-substance/tengomod/interop"
@@ -145,13 +147,13 @@ func (c *GraphQLClient) postJSON(args ...tengo.Object) (tengo.Object, error) {
 		return interop.GoErrToTErr(err), nil
 	}
 
-	return &tengo.ImmutableMap{
-		Value: map[string]tengo.Object{
-			"body": &tengo.String{
-				Value: body,
-			},
-		},
-	}, nil
+	data := make(map[string]interface{})
+	err = json.Unmarshal([]byte(body), &data)
+	if err != nil {
+		return interop.GoErrToTErr(err), nil
+	}
+
+	return tengo.FromInterface(data)
 }
 
 func (c *GraphQLClient) postGraphQL(args ...tengo.Object) (tengo.Object, error) {
@@ -169,13 +171,13 @@ func (c *GraphQLClient) postGraphQL(args ...tengo.Object) (tengo.Object, error) 
 		return interop.GoErrToTErr(err), nil
 	}
 
-	return &tengo.ImmutableMap{
-		Value: map[string]tengo.Object{
-			"body": &tengo.String{
-				Value: body,
-			},
-		},
-	}, nil
+	data := make(map[string]interface{})
+	err = json.Unmarshal([]byte(body), &data)
+	if err != nil {
+		return interop.GoErrToTErr(err), nil
+	}
+
+	return tengo.FromInterface(data)
 }
 
 func (c *GraphQLClient) introspect(args ...tengo.Object) (tengo.Object, error) {
@@ -196,6 +198,21 @@ func (c *GraphQLClient) introspect(args ...tengo.Object) (tengo.Object, error) {
 	return &tengo.ImmutableMap{
 		Value: objMap,
 	}, nil
+}
+
+func (c *GraphQLClient) getIntrospection(args ...tengo.Object) (tengo.Object, error) {
+	body, _, err := c.Value.GetIntrospectionRaw()
+	if err != nil {
+		return interop.GoErrToTErr(err), nil
+	}
+
+	introspection := make(map[string]interface{})
+	err = json.Unmarshal([]byte(body), &introspection)
+	if err != nil {
+		return interop.GoErrToTErr(err), nil
+	}
+
+	return tengo.FromInterface(introspection)
 }
 
 func makeGraphQLClient(client *graphql.Client) *GraphQLClient {
@@ -235,6 +252,10 @@ func makeGraphQLClient(client *graphql.Client) *GraphQLClient {
 		"introspect": &tengo.UserFunction{
 			Name:  "introspect",
 			Value: gqlClient.introspect,
+		},
+		"get_introspection": &tengo.UserFunction{
+			Name:  "get_introspection",
+			Value: gqlClient.getIntrospection,
 		},
 	}
 

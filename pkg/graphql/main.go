@@ -76,6 +76,15 @@ var (
 	Debug bool = false
 )
 
+func clearCache() {
+	typeMap = make(map[string]FullType)
+	scalarTypes = make([]string, 0)
+	objCache = make(map[string]*Object)
+	valCache = make(map[string]interface{})
+	deferResolve = make(map[string][]func(interface{}))
+	resolveStack.Clear()
+}
+
 func indent(v string) string {
 	pad := strings.Repeat("\t", 1)
 	return pad + strings.Replace(v, "\n", "\n"+pad, -1)
@@ -723,6 +732,8 @@ func newRootMutation(name string) *RootMutation {
 }
 
 func ParseIntrospection(response IntrospectionResponse) (*RootQuery, *RootMutation, error) {
+	clearCache()
+
 	schema := response.Data.Schema
 
 	types := schema.Types

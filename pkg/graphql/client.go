@@ -240,20 +240,34 @@ func (c *Client) do(req *http.Request) (string, *http.Response, error) {
 }
 
 func (c *Client) Introspect() (*RootQuery, *RootMutation, error) {
-	body, _, err := c.postJSON(&jsonWrapper{
-		Name:      "IntrospectionQuery",
-		Variables: make(map[string]interface{}),
-		Query:     static.IntrospectionQuery,
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var introspection IntrospectionResponse
-	err = json.Unmarshal([]byte(body), &introspection)
+	introspection, err := c.GetIntrospection()
 	if err != nil {
 		return nil, nil, err
 	}
 
 	return ParseIntrospection(introspection)
+}
+
+func (c *Client) GetIntrospectionRaw() (string, *http.Response, error) {
+	return c.postJSON(&jsonWrapper{
+		Name:      "IntrospectionQuery",
+		Variables: make(map[string]interface{}),
+		Query:     static.IntrospectionQuery,
+	})
+}
+
+func (c *Client) GetIntrospection() (IntrospectionResponse, error) {
+	var introspection IntrospectionResponse
+
+	body, _, err := c.GetIntrospectionRaw()
+	if err != nil {
+		return introspection, err
+	}
+
+	err = json.Unmarshal([]byte(body), &introspection)
+	if err != nil {
+		return introspection, err
+	}
+
+	return introspection, nil
 }
