@@ -11,6 +11,7 @@ import (
 	"github.com/analog-substance/tengo/v2"
 	"github.com/analog-substance/tengo/v2/parser"
 	"github.com/chzyer/readline"
+	"github.com/common-nighthawk/go-figure"
 	"github.com/spf13/cobra"
 )
 
@@ -26,6 +27,9 @@ var rootCmd = &cobra.Command{
 	Short: "A GraphQL pentesting tool",
 	Args:  cobra.ArbitraryArgs,
 	Run: func(cmd *cobra.Command, args []string) {
+		figure.NewFigure("GraphQShell", "doom", true).Print()
+		fmt.Println()
+
 		repl, _ := cmd.Flags().GetBool("repl")
 
 		modules := tengomod.GetModuleMap()

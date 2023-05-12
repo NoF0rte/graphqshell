@@ -6,6 +6,7 @@ require (
 	github.com/analog-substance/tengo/v2 v2.13.1
 	github.com/analog-substance/tengomod v0.0.0-20230512000606-8185785ce99d
 	github.com/chzyer/readline v1.5.1
+	github.com/common-nighthawk/go-figure v0.0.0-20210622060536-734e95fb86be
 	github.com/emirpasic/gods v1.18.1
 	github.com/google/uuid v1.3.0
 	github.com/spf13/cobra v1.7.0
