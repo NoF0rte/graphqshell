@@ -180,19 +180,19 @@ func (c *GraphQLClient) postGraphQL(args ...tengo.Object) (tengo.Object, error) 
 	return tengo.FromInterface(data)
 }
 
-func (c *GraphQLClient) introspect(args ...tengo.Object) (tengo.Object, error) {
-	query, mutation, err := c.Value.Introspect()
+func (c *GraphQLClient) introspectAndParse(args ...tengo.Object) (tengo.Object, error) {
+	query, mutation, err := c.Value.IntrospectAndParse()
 	if err != nil {
 		return interop.GoErrToTErr(err), nil
 	}
 
 	objMap := make(map[string]tengo.Object)
 	if query != nil {
-		objMap["query"] = makeGraphQLRootQuery(query)
+		objMap["query"] = makeGraphQLRootQuery(query, c.Value)
 	}
 
 	if mutation != nil {
-		objMap["mutation"] = makeGraphQLRootMutation(mutation)
+		objMap["mutation"] = makeGraphQLRootMutation(mutation, c.Value)
 	}
 
 	return &tengo.ImmutableMap{
@@ -200,8 +200,8 @@ func (c *GraphQLClient) introspect(args ...tengo.Object) (tengo.Object, error) {
 	}, nil
 }
 
-func (c *GraphQLClient) getIntrospection(args ...tengo.Object) (tengo.Object, error) {
-	body, _, err := c.Value.GetIntrospectionRaw()
+func (c *GraphQLClient) introspect(args ...tengo.Object) (tengo.Object, error) {
+	body, _, err := c.Value.IntrospectRaw()
 	if err != nil {
 		return interop.GoErrToTErr(err), nil
 	}
@@ -249,13 +249,13 @@ func makeGraphQLClient(client *graphql.Client) *GraphQLClient {
 			Name:  "post_graphql",
 			Value: interop.NewCallable(gqlClient.postGraphQL, interop.WithExactArgs(1)),
 		},
+		"introspect_and_parse": &tengo.UserFunction{
+			Name:  "introspect_and_parse",
+			Value: gqlClient.introspectAndParse,
+		},
 		"introspect": &tengo.UserFunction{
 			Name:  "introspect",
 			Value: gqlClient.introspect,
-		},
-		"get_introspection": &tengo.UserFunction{
-			Name:  "get_introspection",
-			Value: gqlClient.getIntrospection,
 		},
 	}
 

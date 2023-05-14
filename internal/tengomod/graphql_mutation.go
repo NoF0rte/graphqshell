@@ -12,6 +12,7 @@ type GraphQLRootMutation struct {
 	tengo.ObjectImpl
 	Value     *graphql.RootMutation
 	objectMap map[string]tengo.Object
+	client    *graphql.Client
 }
 
 func (m *GraphQLRootMutation) TypeName() string {
@@ -79,13 +80,13 @@ func (m *GraphQLRootMutation) get(args ...tengo.Object) (tengo.Object, error) {
 		return nil, nil
 	}
 
-	return makeGraphQLObject(obj), nil
+	return makeGraphQLObject(obj, m.client), nil
 }
 
-func (q *GraphQLRootMutation) mutations(args ...tengo.Object) (tengo.Object, error) {
+func (m *GraphQLRootMutation) mutations(args ...tengo.Object) (tengo.Object, error) {
 	var objs []tengo.Object
-	for _, obj := range q.Value.Mutations {
-		objs = append(objs, makeGraphQLObject(obj))
+	for _, obj := range m.Value.Mutations {
+		objs = append(objs, makeGraphQLObject(obj, m.client))
 	}
 
 	return &tengo.ImmutableArray{
@@ -93,13 +94,14 @@ func (q *GraphQLRootMutation) mutations(args ...tengo.Object) (tengo.Object, err
 	}, nil
 }
 
-func makeGraphQLRootMutation(mutation *graphql.RootMutation) *GraphQLRootMutation {
+func makeGraphQLRootMutation(mutation *graphql.RootMutation, client *graphql.Client) *GraphQLRootMutation {
 	if mutation == nil {
 		return nil
 	}
 
 	rootMutation := &GraphQLRootMutation{
-		Value: mutation,
+		Value:  mutation,
+		client: client,
 	}
 
 	objectMap := map[string]tengo.Object{
@@ -117,7 +119,7 @@ func makeGraphQLRootMutation(mutation *graphql.RootMutation) *GraphQLRootMutatio
 	}
 
 	for _, obj := range mutation.Mutations {
-		objectMap[obj.Name] = makeGraphQLObject(obj)
+		objectMap[obj.Name] = makeGraphQLObject(obj, client)
 	}
 
 	rootMutation.objectMap = objectMap

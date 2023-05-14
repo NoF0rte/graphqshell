@@ -12,6 +12,7 @@ type GraphQLObject struct {
 	tengo.ObjectImpl
 	Value     *graphql.Object
 	objectMap map[string]tengo.Object
+	client    *graphql.Client
 }
 
 func (o *GraphQLObject) TypeName() string {
@@ -81,17 +82,15 @@ func (o *GraphQLObject) IndexSet(index tengo.Object, val tengo.Object) error {
 	return nil
 }
 
-func (o *GraphQLObject) funcAROs(fn func() []*graphql.Object) func(...tengo.Object) (tengo.Object, error) {
-	return func(args ...tengo.Object) (tengo.Object, error) {
-		var objs []tengo.Object
-		for _, obj := range fn() {
-			objs = append(objs, makeGraphQLObject(obj))
-		}
+// Call takes an arbitrary number of arguments and returns a return value
+// and/or an error.
+func (o *GraphQLObject) Call(args ...tengo.Object) (tengo.Object, error) {
+	return makeGraphQLClient(o.client).postJSON(o)
+}
 
-		return &tengo.ImmutableArray{
-			Value: objs,
-		}, nil
-	}
+// CanCall returns whether the Object can be Called.
+func (o *GraphQLObject) CanCall() bool {
+	return true
 }
 
 func (o *GraphQLObject) genValue(args ...tengo.Object) (tengo.Object, error) {
@@ -146,12 +145,13 @@ func (o *GraphQLObject) getField(arg tengo.Object) (tengo.Object, error) {
 		return nil, nil
 	}
 
-	return makeGraphQLObject(field), nil
+	return makeGraphQLObject(field, o.client), nil
 }
 
 func (o *GraphQLObject) getArgs() tengo.Object {
 	return &GraphQLObjArray{
-		Value: o.Value.Args,
+		Value:  o.Value.Args,
+		client: o.client,
 	}
 }
 
@@ -166,12 +166,13 @@ func (o *GraphQLObject) getArg(arg tengo.Object) (tengo.Object, error) {
 		return nil, nil
 	}
 
-	return makeGraphQLObject(argObj), nil
+	return makeGraphQLObject(argObj, o.client), nil
 }
 
-func makeGraphQLObject(obj *graphql.Object) *GraphQLObject {
+func makeGraphQLObject(obj *graphql.Object, client *graphql.Client) *GraphQLObject {
 	gqlObj := &GraphQLObject{
-		Value: obj,
+		Value:  obj,
+		client: client,
 	}
 
 	objectMap := map[string]tengo.Object{

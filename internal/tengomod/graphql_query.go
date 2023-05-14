@@ -12,6 +12,7 @@ type GraphQLRootQuery struct {
 	tengo.ObjectImpl
 	Value     *graphql.RootQuery
 	objectMap map[string]tengo.Object
+	client    *graphql.Client
 }
 
 func (q *GraphQLRootQuery) TypeName() string {
@@ -79,13 +80,13 @@ func (q *GraphQLRootQuery) get(args ...tengo.Object) (tengo.Object, error) {
 		return nil, nil
 	}
 
-	return makeGraphQLObject(obj), nil
+	return makeGraphQLObject(obj, q.client), nil
 }
 
 func (q *GraphQLRootQuery) queries(args ...tengo.Object) (tengo.Object, error) {
 	var objs []tengo.Object
 	for _, obj := range q.Value.Queries {
-		objs = append(objs, makeGraphQLObject(obj))
+		objs = append(objs, makeGraphQLObject(obj, q.client))
 	}
 
 	return &tengo.ImmutableArray{
@@ -93,13 +94,14 @@ func (q *GraphQLRootQuery) queries(args ...tengo.Object) (tengo.Object, error) {
 	}, nil
 }
 
-func makeGraphQLRootQuery(query *graphql.RootQuery) *GraphQLRootQuery {
+func makeGraphQLRootQuery(query *graphql.RootQuery, client *graphql.Client) *GraphQLRootQuery {
 	if query == nil {
 		return nil
 	}
 
 	rootQuery := &GraphQLRootQuery{
-		Value: query,
+		Value:  query,
+		client: client,
 	}
 
 	objectMap := map[string]tengo.Object{
@@ -117,7 +119,7 @@ func makeGraphQLRootQuery(query *graphql.RootQuery) *GraphQLRootQuery {
 	}
 
 	for _, obj := range query.Queries {
-		objectMap[obj.Name] = makeGraphQLObject(obj)
+		objectMap[obj.Name] = makeGraphQLObject(obj, client)
 	}
 
 	rootQuery.objectMap = objectMap

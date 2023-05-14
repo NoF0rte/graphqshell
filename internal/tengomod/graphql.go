@@ -74,18 +74,18 @@ func parseIntrospection(args ...tengo.Object) (tengo.Object, error) {
 		return interop.GoErrToTErr(err), nil
 	}
 
-	query, mutation, err := graphql.ParseIntrospection(introspection)
+	query, mutation, err := graphql.Parse(introspection)
 	if err != nil {
 		return interop.GoErrToTErr(err), nil
 	}
 
 	objMap := make(map[string]tengo.Object)
 	if query != nil {
-		objMap["query"] = makeGraphQLRootQuery(query)
+		objMap["query"] = makeGraphQLRootQuery(query, nil)
 	}
 
 	if mutation != nil {
-		objMap["mutation"] = makeGraphQLRootMutation(mutation)
+		objMap["mutation"] = makeGraphQLRootMutation(mutation, nil)
 	}
 
 	return &tengo.ImmutableMap{

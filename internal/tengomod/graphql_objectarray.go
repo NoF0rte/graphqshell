@@ -10,7 +10,8 @@ import (
 
 type GraphQLObjArray struct {
 	tengo.ObjectImpl
-	Value []*graphql.Object
+	Value  []*graphql.Object
+	client *graphql.Client
 }
 
 func (o *GraphQLObjArray) String() string {
@@ -44,7 +45,7 @@ func (o *GraphQLObjArray) IndexGet(index tengo.Object) (tengo.Object, error) {
 	intIdx, ok := index.(*tengo.Int)
 	if ok {
 		if intIdx.Value >= 0 && intIdx.Value < int64(len(o.Value)) {
-			return makeGraphQLObject(o.Value[intIdx.Value]), nil
+			return makeGraphQLObject(o.Value[intIdx.Value], o.client), nil
 		}
 
 		return nil, tengo.ErrIndexOutOfBounds
@@ -54,7 +55,7 @@ func (o *GraphQLObjArray) IndexGet(index tengo.Object) (tengo.Object, error) {
 	if ok {
 		for _, obj := range o.Value {
 			if strIdx.Value == obj.Name {
-				return makeGraphQLObject(obj), nil
+				return makeGraphQLObject(obj, o.client), nil
 			}
 		}
 
@@ -71,7 +72,7 @@ func (o *GraphQLObjArray) CanIterate() bool {
 func (o *GraphQLObjArray) Iterate() tengo.Iterator {
 	var items []tengo.Object
 	for _, item := range o.Value {
-		items = append(items, makeGraphQLObject(item))
+		items = append(items, makeGraphQLObject(item, o.client))
 	}
 
 	array := &tengo.Array{

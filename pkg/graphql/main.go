@@ -731,7 +731,7 @@ func newRootMutation(name string) *RootMutation {
 	}
 }
 
-func ParseIntrospection(response IntrospectionResponse) (*RootQuery, *RootMutation, error) {
+func Parse(response IntrospectionResponse) (*RootQuery, *RootMutation, error) {
 	clearCache()
 
 	schema := response.Data.Schema

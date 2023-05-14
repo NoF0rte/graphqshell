@@ -239,16 +239,16 @@ func (c *Client) do(req *http.Request) (string, *http.Response, error) {
 	return string(body), resp, nil
 }
 
-func (c *Client) Introspect() (*RootQuery, *RootMutation, error) {
-	introspection, err := c.GetIntrospection()
+func (c *Client) IntrospectAndParse() (*RootQuery, *RootMutation, error) {
+	introspection, err := c.Introspect()
 	if err != nil {
 		return nil, nil, err
 	}
 
-	return ParseIntrospection(introspection)
+	return Parse(introspection)
 }
 
-func (c *Client) GetIntrospectionRaw() (string, *http.Response, error) {
+func (c *Client) IntrospectRaw() (string, *http.Response, error) {
 	return c.postJSON(&jsonWrapper{
 		Name:      "IntrospectionQuery",
 		Variables: make(map[string]interface{}),
@@ -256,10 +256,10 @@ func (c *Client) GetIntrospectionRaw() (string, *http.Response, error) {
 	})
 }
 
-func (c *Client) GetIntrospection() (IntrospectionResponse, error) {
+func (c *Client) Introspect() (IntrospectionResponse, error) {
 	var introspection IntrospectionResponse
 
-	body, _, err := c.GetIntrospectionRaw()
+	body, _, err := c.IntrospectRaw()
 	if err != nil {
 		return introspection, err
 	}

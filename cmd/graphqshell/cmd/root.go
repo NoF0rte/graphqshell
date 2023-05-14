@@ -24,8 +24,16 @@ var (
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "graphqshell [path/to/script]",
-	Short: "A GraphQL pentesting tool",
-	Args:  cobra.ArbitraryArgs,
+	Short: "A GraphQL pentesting scripting engine. Run a script and/or run the REPL.",
+	Example: `Run a script:
+	graphqshell my-script.tengo
+
+Run the REPL:
+	graphqshell
+
+Run a script then break to the REPL:
+	graphqshell my-script.tengo -r`,
+	Args: cobra.ArbitraryArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		figure.NewFigure("GraphQShell", "doom", true).Print()
 		fmt.Println()
@@ -140,11 +148,6 @@ func RunREPL(modules *tengo.ModuleMap, in io.ReadCloser, out io.Writer) {
 
 	spewSymbol := symbolTable.Define("spew")
 	globals[spewSymbol.Index] = tengomod.Spew(out)
-
-	// var constants []tengo.Object
-	// if bytecode != nil {
-	// 	constants = bytecode.Constants
-	// }
 
 	var lines []string
 	for {
