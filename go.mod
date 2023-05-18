@@ -4,7 +4,7 @@ go 1.19
 
 require (
 	github.com/analog-substance/tengo/v2 v2.13.1
-	github.com/analog-substance/tengomod v0.0.0-20230512000606-8185785ce99d
+	github.com/analog-substance/tengomod v0.1.0
 	github.com/chzyer/readline v1.5.1
 	github.com/common-nighthawk/go-figure v0.0.0-20210622060536-734e95fb86be
 	github.com/emirpasic/gods v1.18.1
@@ -13,8 +13,8 @@ require (
 )
 
 require (
-	github.com/Ullaakut/nmap/v3 v3.0.1 // indirect
 	github.com/analog-substance/fileutil v0.0.3 // indirect
+	github.com/analog-substance/nmap/v3 v3.0.2 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.6.0 // indirect
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
