@@ -8,68 +8,71 @@ import (
 	"github.com/analog-substance/tengomod/interop"
 )
 
+var defaultClient *graphql.Client
+
 func graphqlModule() map[string]tengo.Object {
 	return map[string]tengo.Object{
-		"new_client": &tengo.UserFunction{
-			Name:  "new_client",
-			Value: interop.NewCallable(newGraphQLClient, interop.WithExactArgs(1)),
+		"new_client": &interop.AdvFunction{
+			Name:    "new_client",
+			NumArgs: interop.ExactArgs(1),
+			Args:    []interop.AdvArg{interop.StrArg("url")},
+			Value:   newGraphQLClient,
 		},
-		"set_debug": &tengo.UserFunction{
-			Name: "set_debug",
-			Value: interop.NewCallable(func(args ...tengo.Object) (ret tengo.Object, err error) {
-				debug, ok := tengo.ToBool(args[0])
+		"set_debug": &interop.AdvFunction{
+			Name:    "set_debug",
+			NumArgs: interop.ExactArgs(1),
+			Args:    []interop.AdvArg{interop.BoolArg("debug")},
+			Value:   setDebug,
+		},
+		"set_client": &interop.AdvFunction{
+			Name:    "set_client",
+			NumArgs: interop.ExactArgs(1),
+			Args:    []interop.AdvArg{interop.CustomArg("client", &GraphQLClient{})},
+			Value:   setClient,
+		},
+		"parse": &interop.AdvFunction{
+			Name:    "parse",
+			NumArgs: interop.ExactArgs(1),
+			Args: []interop.AdvArg{interop.UnionArg("data", interop.StrType, func(obj tengo.Object, name string) (interface{}, error) {
+				dataMap, ok := tengo.ToInterface(obj).(map[string]interface{})
 				if !ok {
 					return nil, tengo.ErrInvalidArgumentType{
-						Name:     "debug",
-						Expected: "bool(compatible)",
-						Found:    args[0].TypeName(),
+						Name:     name,
+						Expected: "map(compatible)",
+						Found:    obj.TypeName(),
 					}
 				}
 
-				graphql.Debug = debug
+				bytes, err := json.Marshal(dataMap)
+				if err != nil {
+					return nil, err
+				}
 
-				return nil, nil
-			}, interop.WithExactArgs(1)),
-		},
-		"parse": &tengo.UserFunction{
-			Name:  "parse",
-			Value: interop.NewCallable(parseIntrospection, interop.WithExactArgs(1)),
+				return string(bytes), nil
+			})},
+			Value: parseIntrospection,
 		},
 	}
 }
 
-func newGraphQLClient(args ...tengo.Object) (tengo.Object, error) {
-	u, err := interop.TStrToGoStr(args[0], "url")
-	if err != nil {
-		return nil, err
-	}
+func setDebug(args interop.ArgMap) (tengo.Object, error) {
+	debug, _ := args.GetBool("debug")
+	graphql.Debug = debug
 
+	return nil, nil
+}
+
+func newGraphQLClient(args interop.ArgMap) (tengo.Object, error) {
+	u, _ := args.GetString("url")
 	client := graphql.NewClient(u)
 	return makeGraphQLClient(client), nil
 }
 
-func parseIntrospection(args ...tengo.Object) (tengo.Object, error) {
-	data, err := interop.TStrToGoStr(args[0], "data")
-	if err != nil {
-		dataMap, ok := tengo.ToInterface(args[0]).(map[string]interface{})
-		if !ok {
-			return nil, tengo.ErrInvalidArgumentType{
-				Name:     "data",
-				Expected: "map(compatible)",
-				Found:    args[0].TypeName(),
-			}
-		}
-
-		bytes, err := json.Marshal(dataMap)
-		if err != nil {
-			return interop.GoErrToTErr(err), nil
-		}
-
-		data = string(bytes)
-	}
+func parseIntrospection(args interop.ArgMap) (tengo.Object, error) {
+	data, _ := args.GetString("data")
 
 	var introspection graphql.IntrospectionResponse
-	err = json.Unmarshal([]byte(data), &introspection)
+	err := json.Unmarshal([]byte(data), &introspection)
 	if err != nil {
 		return interop.GoErrToTErr(err), nil
 	}
@@ -91,4 +94,12 @@ func parseIntrospection(args ...tengo.Object) (tengo.Object, error) {
 	return &tengo.ImmutableMap{
 		Value: objMap,
 	}, nil
+}
+
+func setClient(args interop.ArgMap) (tengo.Object, error) {
+	obj, _ := args.Get("client")
+	client := obj.(*GraphQLClient)
+
+	defaultClient = client.Value
+	return nil, nil
 }

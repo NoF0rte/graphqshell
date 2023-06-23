@@ -6,12 +6,12 @@ import (
 	"github.com/NoF0rte/graphqshell/pkg/graphql"
 	"github.com/analog-substance/tengo/v2"
 	"github.com/analog-substance/tengomod/interop"
+	"github.com/analog-substance/tengomod/types"
 )
 
 type GraphQLClient struct {
-	tengo.ObjectImpl
-	Value     *graphql.Client
-	objectMap map[string]tengo.Object
+	types.PropObject
+	Value *graphql.Client
 }
 
 func (c *GraphQLClient) TypeName() string {
@@ -36,22 +36,9 @@ func (c *GraphQLClient) CanIterate() bool {
 
 func (c *GraphQLClient) Iterate() tengo.Iterator {
 	immutableMap := &tengo.ImmutableMap{
-		Value: c.objectMap,
+		Value: c.ObjectMap,
 	}
 	return immutableMap.Iterate()
-}
-
-func (c *GraphQLClient) IndexGet(index tengo.Object) (tengo.Object, error) {
-	strIdx, ok := tengo.ToString(index)
-	if !ok {
-		return nil, tengo.ErrInvalidIndexType
-	}
-
-	res, ok := c.objectMap[strIdx]
-	if !ok {
-		res = tengo.UndefinedValue
-	}
-	return res, nil
 }
 
 func (c *GraphQLClient) setHeaders(arg tengo.Object) error {
@@ -132,17 +119,11 @@ func (c *GraphQLClient) getProxy() tengo.Object {
 	return interop.GoStrToTStr(c.Value.GetProxy())
 }
 
-func (c *GraphQLClient) postJSON(args ...tengo.Object) (tengo.Object, error) {
-	obj, ok := args[0].(*GraphQLObject)
-	if !ok {
-		return nil, tengo.ErrInvalidArgumentType{
-			Name:     "object",
-			Expected: "graphql-obj",
-			Found:    args[0].TypeName(),
-		}
-	}
+func (c *GraphQLClient) postJSON(args interop.ArgMap) (tengo.Object, error) {
+	obj, _ := args.GetObject("obj")
+	graphqlObj := obj.(*GraphQLObject)
 
-	body, _, err := c.Value.PostJSON(obj.Value)
+	body, _, err := c.Value.PostJSON(graphqlObj.Value)
 	if err != nil {
 		return interop.GoErrToTErr(err), nil
 	}
@@ -156,17 +137,11 @@ func (c *GraphQLClient) postJSON(args ...tengo.Object) (tengo.Object, error) {
 	return tengo.FromInterface(data)
 }
 
-func (c *GraphQLClient) postGraphQL(args ...tengo.Object) (tengo.Object, error) {
-	obj, ok := args[0].(*GraphQLObject)
-	if !ok {
-		return nil, tengo.ErrInvalidArgumentType{
-			Name:     "object",
-			Expected: "graphql-obj",
-			Found:    args[0].TypeName(),
-		}
-	}
+func (c *GraphQLClient) postGraphQL(args interop.ArgMap) (tengo.Object, error) {
+	obj, _ := args.GetObject("obj")
+	graphqlObj := obj.(*GraphQLObject)
 
-	body, _, err := c.Value.PostGraphQL(obj.Value)
+	body, _, err := c.Value.PostGraphQL(graphqlObj.Value)
 	if err != nil {
 		return interop.GoErrToTErr(err), nil
 	}
@@ -241,13 +216,17 @@ func makeGraphQLClient(client *graphql.Client) *GraphQLClient {
 			Name:  "proxy",
 			Value: getterSetter(gqlClient.getProxy, gqlClient.setProxy),
 		},
-		"post_json": &tengo.UserFunction{
-			Name:  "post_json",
-			Value: interop.NewCallable(gqlClient.postJSON, interop.WithExactArgs(1)),
+		"post_json": &interop.AdvFunction{
+			Name:    "post_json",
+			NumArgs: interop.ExactArgs(1),
+			Args:    []interop.AdvArg{interop.CustomArg("obj", &GraphQLObject{})},
+			Value:   gqlClient.postJSON,
 		},
-		"post_graphql": &tengo.UserFunction{
-			Name:  "post_graphql",
-			Value: interop.NewCallable(gqlClient.postGraphQL, interop.WithExactArgs(1)),
+		"post_graphql": &interop.AdvFunction{
+			Name:    "post_graphql",
+			NumArgs: interop.ExactArgs(1),
+			Args:    []interop.AdvArg{interop.CustomArg("obj", &GraphQLObject{})},
+			Value:   gqlClient.postGraphQL,
 		},
 		"introspect_and_parse": &tengo.UserFunction{
 			Name:  "introspect_and_parse",
@@ -259,6 +238,10 @@ func makeGraphQLClient(client *graphql.Client) *GraphQLClient {
 		},
 	}
 
-	gqlClient.objectMap = objectMap
+	gqlClient.PropObject = types.PropObject{
+		ObjectMap:  objectMap,
+		Properties: make(map[string]types.Property),
+	}
+
 	return gqlClient
 }

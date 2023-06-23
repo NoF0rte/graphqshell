@@ -6,13 +6,13 @@ import (
 	"github.com/NoF0rte/graphqshell/pkg/graphql"
 	"github.com/analog-substance/tengo/v2"
 	"github.com/analog-substance/tengomod/interop"
+	"github.com/analog-substance/tengomod/types"
 )
 
 type GraphQLRootQuery struct {
-	tengo.ObjectImpl
-	Value     *graphql.RootQuery
-	objectMap map[string]tengo.Object
-	client    *graphql.Client
+	types.PropObject
+	Value  *graphql.RootQuery
+	client *graphql.Client
 }
 
 func (q *GraphQLRootQuery) TypeName() string {
@@ -51,30 +51,13 @@ func (q *GraphQLRootQuery) CanIterate() bool {
 
 func (q *GraphQLRootQuery) Iterate() tengo.Iterator {
 	immutableMap := &tengo.ImmutableMap{
-		Value: q.objectMap,
+		Value: q.ObjectMap,
 	}
 	return immutableMap.Iterate()
 }
 
-func (q *GraphQLRootQuery) IndexGet(index tengo.Object) (tengo.Object, error) {
-	strIdx, ok := tengo.ToString(index)
-	if !ok {
-		return nil, tengo.ErrInvalidIndexType
-	}
-
-	res, ok := q.objectMap[strIdx]
-	if !ok {
-		res = tengo.UndefinedValue
-	}
-	return res, nil
-}
-
-func (q *GraphQLRootQuery) get(args ...tengo.Object) (tengo.Object, error) {
-	name, err := interop.TStrToGoStr(args[0], "name")
-	if err != nil {
-		return nil, err
-	}
-
+func (q *GraphQLRootQuery) get(args interop.ArgMap) (tengo.Object, error) {
+	name, _ := args.GetString("name")
 	obj := q.Value.Get(name)
 	if obj == nil {
 		return nil, nil
@@ -112,9 +95,11 @@ func makeGraphQLRootQuery(query *graphql.RootQuery, client *graphql.Client) *Gra
 			Name:  "queries",
 			Value: rootQuery.queries,
 		},
-		"get": &tengo.UserFunction{
-			Name:  "get",
-			Value: interop.NewCallable(rootQuery.get, interop.WithExactArgs(1)),
+		"get": &interop.AdvFunction{
+			Name:    "get",
+			NumArgs: interop.ExactArgs(1),
+			Args:    []interop.AdvArg{interop.StrArg("name")},
+			Value:   rootQuery.get,
 		},
 	}
 
@@ -122,6 +107,10 @@ func makeGraphQLRootQuery(query *graphql.RootQuery, client *graphql.Client) *Gra
 		objectMap[obj.Name] = makeGraphQLObject(obj, client)
 	}
 
-	rootQuery.objectMap = objectMap
+	rootQuery.PropObject = types.PropObject{
+		ObjectMap:  objectMap,
+		Properties: make(map[string]types.Property),
+	}
+
 	return rootQuery
 }

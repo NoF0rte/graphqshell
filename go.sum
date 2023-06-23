@@ -38,14 +38,16 @@ cloud.google.com/go/storage v1.14.0/go.mod h1:GrKmX003DSIwi9o29oFT7YDnHYwZoctc3f
 dmitri.shuralyov.com/gpu/mtl v0.0.0-20190408044501-666a987793e9/go.mod h1:H6x//7gZCb22OMCxBHrMx7a5I7Hp++hsVxbQ4BYO7hU=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/BurntSushi/xgb v0.0.0-20160522181843-27f122750802/go.mod h1:IVnqGOEym/WlBOVXweHU+Q+/VP0lqqI8lqeDx9IjBqo=
+github.com/analog-substance/ffufwrap v0.0.2 h1:b6kt11kKl/bDwm6HiDYGUzA71Ml8QeBeZuizLZg0PC0=
+github.com/analog-substance/ffufwrap v0.0.2/go.mod h1:kG9mlIG0acNoZKWeavfSTh0cG6deDTwytlC+fcNnVF8=
 github.com/analog-substance/fileutil v0.0.3 h1:XL32jRq6AUl9R6hH6i4OTaxpTHzeJ+ai7wdF5uxAuTs=
 github.com/analog-substance/fileutil v0.0.3/go.mod h1:rQ5hl9ESB8jXhoEjGFOQzwx7wZVYoIIxPaSSHuGFNGQ=
 github.com/analog-substance/nmap/v3 v3.0.2 h1:wUiNkE/JiYTJmMEImPKptk7kXVJ+wwFu7TRZfgQEDRI=
 github.com/analog-substance/nmap/v3 v3.0.2/go.mod h1:PE2PY7j0w37MJdsa0kZDzCDc7L3ftVvBPU+P9mSUHgA=
 github.com/analog-substance/tengo/v2 v2.13.1 h1:ktvvPQ2rVGcldSh+vWjD8TgfzZBI+NFQsjzl9GnNHuI=
 github.com/analog-substance/tengo/v2 v2.13.1/go.mod h1:C/tj9BF8bQ4j8IRKzEfHXSktCUvbSyYuP9xjDYMjkdQ=
-github.com/analog-substance/tengomod v0.1.0 h1:zkDgTAKK7ROBNI88ZqscTLZI7pjH3vaOoeReHAZ2nkg=
-github.com/analog-substance/tengomod v0.1.0/go.mod h1:s8EPNoQnTet2N1wK07K1fP79uKQ6Jp+Vd/wJfE9ulQE=
+github.com/analog-substance/tengomod v0.4.4 h1:lTxcb0GsGbr6ouF5OT404DVcM9uy3KTHQmVkr76Gm7Y=
+github.com/analog-substance/tengomod v0.4.4/go.mod h1:HdgTw9jsLoxL0YH9ERdgnFgAPykWIPWa0wdjrLbALBw=
 github.com/bmatcuk/doublestar/v4 v4.6.0 h1:HTuxyug8GyFbRkrffIpzNCSK4luc0TY3wzXvzIZhEXc=
 github.com/bmatcuk/doublestar/v4 v4.6.0/go.mod h1:xBQ8jztBU6kakFMg+8WGxn0c6z1fTSPVIjEY1Wr7jzc=
 github.com/census-instrumentation/opencensus-proto v0.2.1/go.mod h1:f6KPmirojxKA12rnyqOA5BBL4O983OfeGPqjHWSTneU=
@@ -143,6 +145,8 @@ github.com/hashicorp/golang-lru v0.5.0/go.mod h1:/m3WP610KZHVQ1SGc6re/UDhFvYD7pJ
 github.com/hashicorp/golang-lru v0.5.1/go.mod h1:/m3WP610KZHVQ1SGc6re/UDhFvYD7pJ4Ao+sR/qLZy8=
 github.com/hashicorp/hcl v1.0.0 h1:0Anlzjpi4vEasTeNFn2mLJgTSwt0+6sfsiTG8qcWGx4=
 github.com/hashicorp/hcl v1.0.0/go.mod h1:E5yfLk+7swimpb2L/Alb/PJmXilQ/rhwaUYs4T20WEQ=
+github.com/iancoleman/orderedmap v0.2.0 h1:sq1N/TFpYH++aViPcaKjys3bDClUEU7s5B+z6jq8pNA=
+github.com/iancoleman/orderedmap v0.2.0/go.mod h1:N0Wam8K1arqPXNWjMo21EXnBPOPp36vB07FNRdD2geA=
 github.com/ianlancetaylor/demangle v0.0.0-20181102032728-5e5cf60278f6/go.mod h1:aSSvb/t6k1mPoxDqO4vJh6VOCGPwU4O0C2/Eqndh1Sc=
 github.com/ianlancetaylor/demangle v0.0.0-20200824232613-28f6c0f3b639/go.mod h1:aSSvb/t6k1mPoxDqO4vJh6VOCGPwU4O0C2/Eqndh1Sc=
 github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=

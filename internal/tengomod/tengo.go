@@ -18,9 +18,9 @@ func GetModuleMap() *tengo.ModuleMap {
 	return moduleMap
 }
 
-func Spew(out io.Writer) *tengo.UserFunction {
-	callable := func(args ...tengo.Object) (tengo.Object, error) {
-		arg := args[0]
+func Spew(out io.Writer) *interop.AdvFunction {
+	callable := func(args interop.ArgMap) (tengo.Object, error) {
+		arg, _ := args.GetObject("obj")
 		if arg.CanIterate() {
 			iterator := arg.Iterate()
 			for iterator.Next() {
@@ -42,38 +42,50 @@ func Spew(out io.Writer) *tengo.UserFunction {
 		return nil, nil
 	}
 
-	return &tengo.UserFunction{
-		Name:  "spew",
-		Value: interop.NewCallable(callable, interop.WithExactArgs(1)),
+	return &interop.AdvFunction{
+		Name:    "spew",
+		NumArgs: interop.ExactArgs(1),
+		Args:    []interop.AdvArg{interop.ObjectArg("obj")},
+		Value:   callable,
 	}
 }
 
 func getterSetter(get func() tengo.Object, set func(tengo.Object) error) func(...tengo.Object) (tengo.Object, error) {
-	callable := func(args ...tengo.Object) (tengo.Object, error) {
-		if len(args) == 0 {
-			return get(), nil
-		}
+	f := &interop.AdvFunction{
+		NumArgs: interop.MaxArgs(1),
+		Args:    []interop.AdvArg{interop.ObjectArg("arg")},
+		Value: func(args interop.ArgMap) (tengo.Object, error) {
+			arg, ok := args.GetObject("arg")
+			if !ok {
+				return get(), nil
+			}
 
-		err := set(args[0])
-		if err != nil {
-			return interop.GoErrToTErr(err), nil
-		}
-		return nil, nil
+			err := set(arg)
+			if err != nil {
+				return interop.GoErrToTErr(err), nil
+			}
+			return nil, nil
+		},
 	}
-	return interop.NewCallable(callable, interop.WithMaxArgs(1))
+	return f.Call
 }
 
 func getAllOrSingle(allFn func() tengo.Object, singleFn func(tengo.Object) (tengo.Object, error)) func(...tengo.Object) (tengo.Object, error) {
-	callable := func(args ...tengo.Object) (tengo.Object, error) {
-		if len(args) == 0 {
-			return allFn(), nil
-		}
+	f := &interop.AdvFunction{
+		NumArgs: interop.MaxArgs(1),
+		Args:    []interop.AdvArg{interop.ObjectArg("arg")},
+		Value: func(args interop.ArgMap) (tengo.Object, error) {
+			arg, ok := args.GetObject("arg")
+			if !ok {
+				return allFn(), nil
+			}
 
-		single, err := singleFn(args[0])
-		if err != nil {
-			return interop.GoErrToTErr(err), nil
-		}
-		return single, nil
+			single, err := singleFn(arg)
+			if err != nil {
+				return interop.GoErrToTErr(err), nil
+			}
+			return single, nil
+		},
 	}
-	return interop.NewCallable(callable, interop.WithMaxArgs(1))
+	return f.Call
 }

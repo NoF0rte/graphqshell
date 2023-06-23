@@ -6,13 +6,13 @@ import (
 	"github.com/NoF0rte/graphqshell/pkg/graphql"
 	"github.com/analog-substance/tengo/v2"
 	"github.com/analog-substance/tengomod/interop"
+	"github.com/analog-substance/tengomod/types"
 )
 
 type GraphQLObject struct {
-	tengo.ObjectImpl
-	Value     *graphql.Object
-	objectMap map[string]tengo.Object
-	client    *graphql.Client
+	types.PropObject
+	Value  *graphql.Object
+	client *graphql.Client
 }
 
 func (o *GraphQLObject) TypeName() string {
@@ -43,49 +43,22 @@ func (o *GraphQLObject) CanIterate() bool {
 
 func (o *GraphQLObject) Iterate() tengo.Iterator {
 	immutableMap := &tengo.ImmutableMap{
-		Value: o.objectMap,
+		Value: o.ObjectMap,
 	}
 	return immutableMap.Iterate()
-}
-
-func (o *GraphQLObject) IndexGet(index tengo.Object) (tengo.Object, error) {
-	strIdx, ok := tengo.ToString(index)
-	if !ok {
-		return nil, tengo.ErrInvalidIndexType
-	}
-
-	res, ok := o.objectMap[strIdx]
-	if !ok {
-		res = tengo.UndefinedValue
-	}
-	return res, nil
-}
-
-func (o *GraphQLObject) IndexSet(index tengo.Object, val tengo.Object) error {
-	strIdx, ok := tengo.ToString(index)
-	if !ok {
-		return tengo.ErrInvalidIndexType
-	}
-
-	if strIdx != "description" {
-		return tengo.ErrInvalidIndexOnError
-	}
-
-	value, ok := tengo.ToString(val)
-	if !ok {
-		return tengo.ErrInvalidIndexValueType
-	}
-
-	o.Value.Description = value
-	o.objectMap[strIdx] = val
-
-	return nil
 }
 
 // Call takes an arbitrary number of arguments and returns a return value
 // and/or an error.
 func (o *GraphQLObject) Call(args ...tengo.Object) (tengo.Object, error) {
-	return makeGraphQLClient(o.client).postJSON(o)
+	client := o.client
+	if client == nil {
+		client = defaultClient
+	}
+
+	return makeGraphQLClient(client).postJSON(interop.ArgMap{
+		"obj": o,
+	})
 }
 
 // CanCall returns whether the Object can be Called.
@@ -98,8 +71,9 @@ func (o *GraphQLObject) genValue(args ...tengo.Object) (tengo.Object, error) {
 	return tengo.FromInterface(val)
 }
 
-func (o *GraphQLObject) setValue(args ...tengo.Object) (tengo.Object, error) {
-	val := tengo.ToInterface(args[0])
+func (o *GraphQLObject) setValue(args interop.ArgMap) (tengo.Object, error) {
+	arg, _ := args.GetObject("val")
+	val := tengo.ToInterface(arg)
 	o.Value.SetValue(val)
 	return nil, nil
 }
@@ -109,12 +83,8 @@ func (o *GraphQLObject) genArgs(args ...tengo.Object) (tengo.Object, error) {
 	return tengo.FromInterface(generatedArgs)
 }
 
-func (o *GraphQLObject) genArg(args ...tengo.Object) (tengo.Object, error) {
-	name, err := interop.TStrToGoStr(args[0], "name")
-	if err != nil {
-		return nil, err
-	}
-
+func (o *GraphQLObject) genArg(args interop.ArgMap) (tengo.Object, error) {
+	name, _ := args.GetString("name")
 	arg := o.Value.GenArg(name)
 	return tengo.FromInterface(arg)
 }
@@ -176,22 +146,15 @@ func makeGraphQLObject(obj *graphql.Object, client *graphql.Client) *GraphQLObje
 	}
 
 	objectMap := map[string]tengo.Object{
-		"name": &tengo.String{
-			Value: obj.Name,
-		},
-		"description": &tengo.String{
-			Value: obj.Description,
-		},
-		"type": &tengo.String{
-			Value: obj.Type.String(),
-		},
 		"gen_value": &tengo.UserFunction{
 			Name:  "gen_value",
 			Value: gqlObj.genValue,
 		},
-		"set_value": &tengo.UserFunction{
-			Name:  "set_value",
-			Value: interop.NewCallable(gqlObj.setValue, interop.WithExactArgs(1)),
+		"set_value": &interop.AdvFunction{
+			Name:    "set_value",
+			NumArgs: interop.ExactArgs(1),
+			Args:    []interop.AdvArg{interop.ObjectArg("val")},
+			Value:   gqlObj.setValue,
 		},
 		"fields": &tengo.UserFunction{
 			Name:  "fields",
@@ -205,9 +168,11 @@ func makeGraphQLObject(obj *graphql.Object, client *graphql.Client) *GraphQLObje
 			Name:  "gen_args",
 			Value: gqlObj.genArgs,
 		},
-		"gen_arg": &tengo.UserFunction{
-			Name:  "gen_arg",
-			Value: interop.NewCallable(gqlObj.genArg, interop.WithExactArgs(1)),
+		"gen_arg": &interop.AdvFunction{
+			Name:    "gen_arg",
+			NumArgs: interop.ExactArgs(1),
+			Args:    []interop.AdvArg{interop.StrArg("name")},
+			Value:   gqlObj.genArg,
 		},
 		"to_graphql": &tengo.UserFunction{
 			Name:  "to_graphql",
@@ -215,6 +180,28 @@ func makeGraphQLObject(obj *graphql.Object, client *graphql.Client) *GraphQLObje
 		},
 	}
 
-	gqlObj.objectMap = objectMap
+	properties := map[string]types.Property{
+		"name": types.StaticProperty(interop.GoStrToTStr(obj.Name)),
+		"type": types.StaticProperty(interop.GoStrToTStr(obj.Type.String())),
+		"description": {
+			Get: func() tengo.Object {
+				return interop.GoStrToTStr(obj.Description)
+			},
+			Set: func(o tengo.Object) error {
+				desc, err := interop.TStrToGoStr(o, "description")
+				if err != nil {
+					return err
+				}
+
+				obj.Description = desc
+				return nil
+			},
+		},
+	}
+
+	gqlObj.PropObject = types.PropObject{
+		ObjectMap:  objectMap,
+		Properties: properties,
+	}
 	return gqlObj
 }

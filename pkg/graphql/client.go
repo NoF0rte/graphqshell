@@ -232,7 +232,7 @@ func (c *Client) do(req *http.Request) (string, *http.Response, error) {
 	}
 
 	body, err := io.ReadAll(resp.Body)
-	if err != nil {
+	if err != nil && (!strings.Contains(err.Error(), "remote error") || c.options.proxy == "") {
 		return "", resp, err
 	}
 

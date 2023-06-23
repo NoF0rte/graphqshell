@@ -6,13 +6,13 @@ import (
 	"github.com/NoF0rte/graphqshell/pkg/graphql"
 	"github.com/analog-substance/tengo/v2"
 	"github.com/analog-substance/tengomod/interop"
+	"github.com/analog-substance/tengomod/types"
 )
 
 type GraphQLRootMutation struct {
-	tengo.ObjectImpl
-	Value     *graphql.RootMutation
-	objectMap map[string]tengo.Object
-	client    *graphql.Client
+	types.PropObject
+	Value  *graphql.RootMutation
+	client *graphql.Client
 }
 
 func (m *GraphQLRootMutation) TypeName() string {
@@ -51,30 +51,13 @@ func (m *GraphQLRootMutation) CanIterate() bool {
 
 func (m *GraphQLRootMutation) Iterate() tengo.Iterator {
 	immutableMap := &tengo.ImmutableMap{
-		Value: m.objectMap,
+		Value: m.ObjectMap,
 	}
 	return immutableMap.Iterate()
 }
 
-func (m *GraphQLRootMutation) IndexGet(index tengo.Object) (tengo.Object, error) {
-	strIdx, ok := tengo.ToString(index)
-	if !ok {
-		return nil, tengo.ErrInvalidIndexType
-	}
-
-	res, ok := m.objectMap[strIdx]
-	if !ok {
-		res = tengo.UndefinedValue
-	}
-	return res, nil
-}
-
-func (m *GraphQLRootMutation) get(args ...tengo.Object) (tengo.Object, error) {
-	name, err := interop.TStrToGoStr(args[0], "name")
-	if err != nil {
-		return nil, err
-	}
-
+func (m *GraphQLRootMutation) get(args interop.ArgMap) (tengo.Object, error) {
+	name, _ := args.GetString("name")
 	obj := m.Value.Get(name)
 	if obj == nil {
 		return nil, nil
@@ -112,9 +95,11 @@ func makeGraphQLRootMutation(mutation *graphql.RootMutation, client *graphql.Cli
 			Name:  "mutations",
 			Value: rootMutation.mutations,
 		},
-		"get": &tengo.UserFunction{
-			Name:  "get",
-			Value: interop.NewCallable(rootMutation.get, interop.WithExactArgs(1)),
+		"get": &interop.AdvFunction{
+			Name:    "get",
+			NumArgs: interop.ExactArgs(1),
+			Args:    []interop.AdvArg{interop.StrArg("name")},
+			Value:   rootMutation.get,
 		},
 	}
 
@@ -122,6 +107,10 @@ func makeGraphQLRootMutation(mutation *graphql.RootMutation, client *graphql.Cli
 		objectMap[obj.Name] = makeGraphQLObject(obj, client)
 	}
 
-	rootMutation.objectMap = objectMap
+	rootMutation.PropObject = types.PropObject{
+		ObjectMap:  objectMap,
+		Properties: make(map[string]types.Property),
+	}
+
 	return rootMutation
 }
