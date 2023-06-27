@@ -41,13 +41,6 @@ func (o *GraphQLObject) CanIterate() bool {
 	return true
 }
 
-func (o *GraphQLObject) Iterate() tengo.Iterator {
-	immutableMap := &tengo.ImmutableMap{
-		Value: o.ObjectMap,
-	}
-	return immutableMap.Iterate()
-}
-
 // Call takes an arbitrary number of arguments and returns a return value
 // and/or an error.
 func (o *GraphQLObject) Call(args ...tengo.Object) (tengo.Object, error) {
@@ -197,6 +190,15 @@ func makeGraphQLObject(obj *graphql.Object, client *graphql.Client) *GraphQLObje
 				return nil
 			},
 		},
+	}
+
+	for i := range obj.Fields {
+		field := obj.Fields[i]
+		properties[field.Name] = types.Property{
+			Get: func() tengo.Object {
+				return makeGraphQLObject(field, client)
+			},
+		}
 	}
 
 	gqlObj.PropObject = types.PropObject{

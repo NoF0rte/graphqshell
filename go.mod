@@ -4,7 +4,7 @@ go 1.19
 
 require (
 	github.com/analog-substance/tengo/v2 v2.13.1
-	github.com/analog-substance/tengomod v0.4.4
+	github.com/analog-substance/tengomod v0.5.0
 	github.com/chzyer/readline v1.5.1
 	github.com/common-nighthawk/go-figure v0.0.0-20210622060536-734e95fb86be
 	github.com/emirpasic/gods v1.18.1

@@ -2,6 +2,7 @@ package tengomod
 
 import (
 	"encoding/json"
+	"os"
 
 	"github.com/NoF0rte/graphqshell/pkg/graphql"
 	"github.com/analog-substance/tengo/v2"
@@ -52,6 +53,12 @@ func graphqlModule() map[string]tengo.Object {
 			})},
 			Value: parseIntrospection,
 		},
+		"parse_file": &interop.AdvFunction{
+			Name:    "parse_file",
+			NumArgs: interop.ExactArgs(1),
+			Args:    []interop.AdvArg{interop.StrArg("file")},
+			Value:   parseIntrospectionFile,
+		},
 	}
 }
 
@@ -94,6 +101,19 @@ func parseIntrospection(args interop.ArgMap) (tengo.Object, error) {
 	return &tengo.ImmutableMap{
 		Value: objMap,
 	}, nil
+}
+
+func parseIntrospectionFile(args interop.ArgMap) (tengo.Object, error) {
+	file, _ := args.GetString("file")
+
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return interop.GoErrToTErr(err), nil
+	}
+
+	return parseIntrospection(interop.ArgMap{
+		"data": string(data),
+	})
 }
 
 func setClient(args interop.ArgMap) (tengo.Object, error) {

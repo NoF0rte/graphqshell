@@ -49,13 +49,6 @@ func (m *GraphQLRootMutation) CanIterate() bool {
 	return true
 }
 
-func (m *GraphQLRootMutation) Iterate() tengo.Iterator {
-	immutableMap := &tengo.ImmutableMap{
-		Value: m.ObjectMap,
-	}
-	return immutableMap.Iterate()
-}
-
 func (m *GraphQLRootMutation) get(args interop.ArgMap) (tengo.Object, error) {
 	name, _ := args.GetString("name")
 	obj := m.Value.Get(name)
