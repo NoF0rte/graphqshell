@@ -123,13 +123,13 @@ func (c *GraphQLClient) postJSON(args interop.ArgMap) (tengo.Object, error) {
 	obj, _ := args.GetObject("obj")
 	graphqlObj := obj.(*GraphQLObject)
 
-	body, _, err := c.Value.PostJSON(graphqlObj.Value)
+	resp, err := c.Value.PostJSON(graphqlObj.Value)
 	if err != nil {
 		return interop.GoErrToTErr(err), nil
 	}
 
 	data := make(map[string]interface{})
-	err = json.Unmarshal([]byte(body), &data)
+	err = json.Unmarshal([]byte(resp.Result.Raw), &data)
 	if err != nil {
 		return interop.GoErrToTErr(err), nil
 	}
@@ -141,13 +141,13 @@ func (c *GraphQLClient) postGraphQL(args interop.ArgMap) (tengo.Object, error) {
 	obj, _ := args.GetObject("obj")
 	graphqlObj := obj.(*GraphQLObject)
 
-	body, _, err := c.Value.PostGraphQL(graphqlObj.Value)
+	resp, err := c.Value.PostGraphQL(graphqlObj.Value)
 	if err != nil {
 		return interop.GoErrToTErr(err), nil
 	}
 
 	data := make(map[string]interface{})
-	err = json.Unmarshal([]byte(body), &data)
+	err = json.Unmarshal([]byte(resp.Result.Raw), &data)
 	if err != nil {
 		return interop.GoErrToTErr(err), nil
 	}
@@ -176,13 +176,13 @@ func (c *GraphQLClient) introspectAndParse(args ...tengo.Object) (tengo.Object, 
 }
 
 func (c *GraphQLClient) introspect(args ...tengo.Object) (tengo.Object, error) {
-	body, _, err := c.Value.IntrospectRaw()
+	resp, err := c.Value.IntrospectRaw()
 	if err != nil {
 		return interop.GoErrToTErr(err), nil
 	}
 
 	introspection := make(map[string]interface{})
-	err = json.Unmarshal([]byte(body), &introspection)
+	err = json.Unmarshal([]byte(resp.Result.Raw), &introspection)
 	if err != nil {
 		return interop.GoErrToTErr(err), nil
 	}

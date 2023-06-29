@@ -445,9 +445,9 @@ type Object struct {
 	Args           []*Object
 	Fields         []*Object
 	PossibleValues []*Object
+	Template       string
 	valFactory     func(string) interface{}
 	valOverride    interface{}
-	template       string
 }
 
 func (o *Object) GenValue() interface{} {
@@ -599,8 +599,8 @@ func (o *Object) ToGraphQL() (string, error) {
 	}
 
 	output := buf.String()
-	if o.template != "" {
-		bodyTemplate := template.Must(template.New("body").Parse(o.template))
+	if o.Template != "" {
+		bodyTemplate := template.Must(template.New("body").Parse(o.Template))
 
 		buf.Reset()
 		err = bodyTemplate.Execute(buf, bodyContext{
@@ -637,6 +637,22 @@ func (o *Object) ToArgStr() string {
 	return toArgStr(o.Name, o.GenValue())
 }
 
+// func (o *Object) Copy() *Object {
+
+// 	var args []*Object
+// 	for _, arg := range o.Args {
+
+// 	}
+
+// 	return &Object{
+// 		Name:        o.Name,
+// 		Description: o.Description,
+// 		valFactory:  o.valFactory,
+// 		valOverride: o.valOverride,
+// 		Template:    o.Template,
+// 	}
+// }
+
 type RootQuery struct {
 	Name    string
 	Queries []*Object
@@ -670,7 +686,7 @@ func newRootQuery(name string) *RootQuery {
 
 		obj := field.Resolve()
 		if obj != nil {
-			obj.template = queryTemplate
+			obj.Template = queryTemplate
 			queries = append(queries, obj)
 		}
 	}
@@ -717,7 +733,7 @@ func newRootMutation(name string) *RootMutation {
 
 		mutation := field.Resolve()
 		if mutation != nil {
-			mutation.template = mutationTemplate
+			mutation.Template = mutationTemplate
 			mutations = append(mutations, mutation)
 		}
 	}

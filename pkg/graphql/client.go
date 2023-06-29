@@ -1,6 +1,7 @@
 package graphql
 
 import (
+	"bytes"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -17,10 +18,23 @@ const (
 	graphqlMIME string = "application/graphql"
 )
 
-type jsonWrapper struct {
+type Request struct {
 	Name      string                 `json:"operationName"`
 	Variables map[string]interface{} `json:"variables"`
 	Query     string                 `json:"query"`
+}
+
+type Result struct {
+	Data   map[string]interface{} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+	Raw string `json:"-"`
+}
+
+type Response struct {
+	Result      *Result
+	RawResponse *http.Response
 }
 
 type ClientOptions struct {
@@ -186,57 +200,69 @@ func (c *Client) newRequest(url string, method string, contentType string, data 
 	return request, nil
 }
 
-func (c *Client) PostJSON(obj *Object) (string, *http.Response, error) {
+func (c *Client) PostJSON(obj *Object) (*Response, error) {
 	query, err := obj.ToGraphQL()
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 
-	return c.postJSON(&jsonWrapper{
+	return c.Post(&Request{
 		Name:      obj.Name,
 		Variables: make(map[string]interface{}),
 		Query:     query,
 	})
 }
 
-func (c *Client) PostGraphQL(obj *Object) (string, *http.Response, error) {
+func (c *Client) PostGraphQL(obj *Object) (*Response, error) {
 	query, err := obj.ToGraphQL()
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 
-	req, err := c.newRequest(c.url, http.MethodPost, graphqlMIME, query)
-	if err != nil {
-		return "", nil, err
-	}
-
-	return c.do(req)
+	return c.post(query, graphqlMIME)
 }
 
-func (c *Client) postJSON(wrapper *jsonWrapper) (string, *http.Response, error) {
-	bytes, _ := json.Marshal(wrapper)
+func (c *Client) Post(request *Request) (*Response, error) {
+	bytes, _ := json.Marshal(request)
 	data := string(bytes)
 
-	req, err := c.newRequest(c.url, http.MethodPost, jsonMIME, data)
+	return c.post(data, jsonMIME)
+}
+
+func (c *Client) post(body string, contentType string) (*Response, error) {
+	req, err := c.newRequest(c.url, http.MethodPost, contentType, body)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 
 	return c.do(req)
 }
 
-func (c *Client) do(req *http.Request) (string, *http.Response, error) {
+func (c *Client) do(req *http.Request) (*Response, error) {
 	resp, err := c.http.Do(req)
+	response := &Response{
+		RawResponse: resp,
+		Result:      &Result{},
+	}
+
 	if err != nil {
-		return "", resp, err
+		return response, err
 	}
 
 	body, err := io.ReadAll(resp.Body)
+	resp.Body = io.NopCloser(bytes.NewBuffer(body))
+
 	if err != nil && (!strings.Contains(err.Error(), "remote error") || c.options.proxy == "") {
-		return "", resp, err
+		return response, err
 	}
 
-	return string(body), resp, nil
+	err = json.Unmarshal(body, response.Result)
+	if err != nil {
+		return response, err
+	}
+
+	response.Result.Raw = string(body)
+	return response, nil
 }
 
 func (c *Client) IntrospectAndParse() (*RootQuery, *RootMutation, error) {
@@ -248,8 +274,8 @@ func (c *Client) IntrospectAndParse() (*RootQuery, *RootMutation, error) {
 	return Parse(introspection)
 }
 
-func (c *Client) IntrospectRaw() (string, *http.Response, error) {
-	return c.postJSON(&jsonWrapper{
+func (c *Client) IntrospectRaw() (*Response, error) {
+	return c.Post(&Request{
 		Name:      "IntrospectionQuery",
 		Variables: make(map[string]interface{}),
 		Query:     static.IntrospectionQuery,
@@ -259,12 +285,12 @@ func (c *Client) IntrospectRaw() (string, *http.Response, error) {
 func (c *Client) Introspect() (IntrospectionResponse, error) {
 	var introspection IntrospectionResponse
 
-	body, _, err := c.IntrospectRaw()
+	resp, err := c.IntrospectRaw()
 	if err != nil {
 		return introspection, err
 	}
 
-	err = json.Unmarshal([]byte(body), &introspection)
+	err = json.Unmarshal([]byte(resp.Result.Raw), &introspection)
 	if err != nil {
 		return introspection, err
 	}
