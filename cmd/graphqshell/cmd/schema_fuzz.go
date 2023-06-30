@@ -12,13 +12,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type resultType int
-
-const (
-	fieldResult resultType = iota
-	typeResult
-)
-
 type jobType int
 
 const (
@@ -46,7 +39,6 @@ type Result interface {
 }
 
 type FieldResult struct {
-	Word  string
 	Field string
 
 	obj *graphql.Object
@@ -57,7 +49,6 @@ func (r *FieldResult) Object() *graphql.Object {
 }
 
 type TypeResult struct {
-	Word string
 	Type string
 	Kind string
 
@@ -65,6 +56,16 @@ type TypeResult struct {
 }
 
 func (r *TypeResult) Object() *graphql.Object {
+	return r.obj
+}
+
+type ArgResult struct {
+	Arg  string
+	Type string
+	obj  *graphql.Object
+}
+
+func (r *ArgResult) Object() *graphql.Object {
 	return r.obj
 }
 
@@ -183,6 +184,9 @@ var schemaFuzzCmd = &cobra.Command{
 		fieldOfTypeRe := func(name string) *regexp.Regexp {
 			return regexp.MustCompile(fmt.Sprintf(`Field \"%s\" of type \"([^"]+)\"`, regexp.QuoteMeta(name)))
 		}
+		requiredArgRe := func(name string) *regexp.Regexp {
+			return regexp.MustCompile(fmt.Sprintf(`Field "%s" argument "(%s)" of type "([^"]+)" is required`, regexp.QuoteMeta(name), graphqlNameRe))
+		}
 
 		didYouMeanRe := regexp.MustCompile(`Did you mean.*\?`)
 		graphqlRe := regexp.MustCompile(fmt.Sprintf(`"(%s)(?: .*)?"`, graphqlNameRe))
@@ -231,7 +235,6 @@ var schemaFuzzCmd = &cobra.Command{
 					allMatches := graphqlRe.FindAllStringSubmatch(didYouMeanMatches[0], -1)
 					for _, matches := range allMatches {
 						results <- &FieldResult{
-							Word:  word,
 							Field: matches[1],
 							obj:   o,
 						}
@@ -257,6 +260,88 @@ var schemaFuzzCmd = &cobra.Command{
 
 			return c
 		}
+
+		processArgResp := func(o *graphql.Object, resp *graphql.Response, results chan Result) {
+			for _, e := range resp.Result.Errors {
+				didYouMeanMatches := didYouMeanRe.FindStringSubmatch(e.Message)
+				if len(didYouMeanMatches) == 0 {
+					continue
+				}
+
+				allMatches := graphqlRe.FindAllStringSubmatch(didYouMeanMatches[0], -1)
+				for _, matches := range allMatches {
+					results <- &FieldResult{
+						Field: matches[1],
+						obj:   o,
+					}
+				}
+			}
+		}
+		argsWorker := func(o *graphql.Object, words chan string, results chan Result, wg *sync.WaitGroup) {
+			defer wg.Done()
+
+			obj := *o
+
+			obj.Fields = []*graphql.Object{
+				&graphql.Object{Name: "graphqlshell"},
+			}
+
+			fuzzArg := &graphql.Object{}
+			obj.Args = []*graphql.Object{fuzzArg}
+
+			for word := range words {
+				fuzzArg.Name = word
+
+				resp, err := client.PostJSON(getRootObj(&obj))
+				if err != nil {
+					fmt.Printf("[!] Error posting: %v\n", err)
+					continue
+				}
+
+				processArgResp(o, resp, results)
+			}
+		}
+		fuzzArgs := func(o *graphql.Object) chan Result {
+			c := make(chan Result)
+
+			go func() {
+				obj := *o
+				obj.Fields = append(obj.Fields, &graphql.Object{
+					Name: "graphqshell",
+				})
+
+				resp, err := client.PostJSON(&obj)
+				if err != nil {
+					fmt.Printf("[!] Error posting: %v\n", err)
+				} else {
+					for _, e := range resp.Result.Errors {
+						matches := requiredArgRe(obj.Name).FindAllStringSubmatch(e.Message, -1)
+						if len(matches) == 0 {
+							continue
+						}
+
+						c <- &ArgResult{
+							Arg:  matches[0][1],
+							Type: matches[0][2],
+							obj:  o,
+						}
+					}
+				}
+
+				wg := &sync.WaitGroup{}
+				words := getWords()
+				for i := 0; i < threads; i++ {
+					wg.Add(1)
+					go argsWorker(o, words, c, wg)
+				}
+
+				wg.Wait()
+				close(c)
+			}()
+
+			return c
+		}
+
 		determineType := func(o *graphql.Object) chan Result {
 			c := make(chan Result)
 
@@ -278,7 +363,6 @@ var schemaFuzzCmd = &cobra.Command{
 				for _, e := range resp.Result.Errors {
 					result := &TypeResult{
 						obj:  o,
-						Word: name,
 						Kind: graphql.KindObject,
 					}
 
