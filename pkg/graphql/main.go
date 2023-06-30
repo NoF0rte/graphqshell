@@ -16,14 +16,14 @@ import (
 )
 
 const (
-	kindNonNull     string = "NON_NULL"
-	kindScalar      string = "SCALAR"
-	kindObject      string = "OBJECT"
-	kindInterface   string = "INTERFACE"
-	kindInputObject string = "INPUT_OBJECT"
-	kindEnum        string = "ENUM"
-	kindList        string = "LIST"
-	kindUnion       string = "UNION"
+	KindNonNull     string = "NON_NULL"
+	KindScalar      string = "SCALAR"
+	KindObject      string = "OBJECT"
+	KindInterface   string = "INTERFACE"
+	KindInputObject string = "INPUT_OBJECT"
+	KindEnum        string = "ENUM"
+	KindList        string = "LIST"
+	KindUnion       string = "UNION"
 
 	typeInt      string = "Int"
 	typeString   string = "String"
@@ -271,7 +271,7 @@ func (t TypeRef) RootName() string {
 
 func (t TypeRef) IsScalar() bool {
 	if t.OfType == nil {
-		return t.Kind == kindScalar
+		return t.Kind == KindScalar
 	}
 
 	return t.OfType.IsScalar()
@@ -284,7 +284,7 @@ func (t TypeRef) Resolve() *Object {
 	}
 
 	switch t.Kind {
-	case kindNonNull, kindList:
+	case KindNonNull, KindList:
 		obj := getOrResolveObj(t.OfType)
 		if obj == nil {
 			return nil
@@ -299,7 +299,7 @@ func (t TypeRef) Resolve() *Object {
 			PossibleValues: obj.PossibleValues,
 			valFactory: func(name string) interface{} {
 				copied.Name = name
-				if t.Kind == kindList {
+				if t.Kind == KindList {
 					return []interface{}{
 						getOrGenValue(&copied),
 					}
@@ -308,7 +308,7 @@ func (t TypeRef) Resolve() *Object {
 				return getOrGenValue(&copied)
 			},
 		}
-	case kindEnum:
+	case KindEnum:
 		return &Object{
 			Name: t.String(),
 			Type: t,
@@ -316,7 +316,7 @@ func (t TypeRef) Resolve() *Object {
 				return objType.EnumValues[rand.Intn(len(objType.EnumValues))].Name
 			},
 		}
-	case kindScalar:
+	case KindScalar:
 		return &Object{
 			Name: t.String(),
 			Type: t,
@@ -345,7 +345,7 @@ func (t TypeRef) Resolve() *Object {
 				}
 			},
 		}
-	case kindObject, kindInputObject, kindInterface, kindUnion:
+	case KindObject, KindInputObject, KindInterface, KindUnion:
 		resolveStack.Push(t.Name)
 
 		obj := &Object{
@@ -438,6 +438,27 @@ func (t TypeRef) Resolve() *Object {
 	}
 }
 
+func TypeRefFromString(input string, kind string) *TypeRef {
+	if strings.HasSuffix(input, "!") {
+		ref := TypeRefFromString(input[:len(input)-1], kind)
+		return &TypeRef{
+			Kind:   KindNonNull,
+			OfType: ref,
+		}
+	} else if strings.HasPrefix(input, "[") {
+		ref := TypeRefFromString(input[1:len(input)-1], kind)
+		return &TypeRef{
+			Kind:   KindList,
+			OfType: ref,
+		}
+	}
+
+	return &TypeRef{
+		Name: input,
+		Kind: kind,
+	}
+}
+
 type Object struct {
 	Name           string
 	Description    string
@@ -445,6 +466,7 @@ type Object struct {
 	Args           []*Object
 	Fields         []*Object
 	PossibleValues []*Object
+	Parent         *Object
 	Template       string
 	valFactory     func(string) interface{}
 	valOverride    interface{}
@@ -637,6 +659,17 @@ func (o *Object) ToArgStr() string {
 	return toArgStr(o.Name, o.GenValue())
 }
 
+func (o *Object) AddField(field *Object) bool {
+	for _, f := range o.Fields {
+		if f.Name == field.Name {
+			return false
+		}
+	}
+
+	o.Fields = append(o.Fields, field)
+	return true
+}
+
 // func (o *Object) Copy() *Object {
 
 // 	var args []*Object
@@ -754,7 +787,7 @@ func Parse(response IntrospectionResponse) (*RootQuery, *RootMutation, error) {
 
 	types := schema.Types
 	for _, t := range types {
-		if t.Kind == kindScalar {
+		if t.Kind == KindScalar {
 			scalarTypes = append(scalarTypes, t.Name)
 		}
 
