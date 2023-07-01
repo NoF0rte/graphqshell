@@ -11,6 +11,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/emirpasic/gods/sets/hashset"
 	"github.com/emirpasic/gods/stacks/arraystack"
 	"github.com/google/uuid"
 )
@@ -143,14 +144,14 @@ type IntrospectionResponse struct {
 	} `json:"data"`
 }
 
+type RootType struct {
+	Name string `json:"name,omitempty"`
+}
+
 type Schema struct {
-	MutationType struct {
-		Name string `json:"name"`
-	} `json:"mutationType"`
-	QueryType struct {
-		Name string `json:"name"`
-	} `json:"queryType"`
-	Types []FullType `json:"types"`
+	MutationType RootType   `json:"mutationType,omitempty"`
+	QueryType    RootType   `json:"queryType,omitempty"`
+	Types        []FullType `json:"types"`
 }
 
 type FullType struct {
@@ -267,6 +268,14 @@ func (t TypeRef) RootName() string {
 	}
 
 	return t.OfType.RootName()
+}
+
+func (t TypeRef) RootKind() string {
+	if t.OfType == nil {
+		return t.Kind
+	}
+
+	return t.OfType.RootKind()
 }
 
 func (t TypeRef) IsScalar() bool {
@@ -670,6 +679,17 @@ func (o *Object) AddField(field *Object) bool {
 	return true
 }
 
+func (o *Object) AddArg(arg *Object) bool {
+	for _, a := range o.Args {
+		if a.Name == arg.Name {
+			return false
+		}
+	}
+
+	o.Args = append(o.Args, arg)
+	return true
+}
+
 // func (o *Object) Copy() *Object {
 
 // 	var args []*Object
@@ -795,4 +815,175 @@ func Parse(response IntrospectionResponse) (*RootQuery, *RootMutation, error) {
 	}
 
 	return newRootQuery(schema.QueryType.Name), newRootMutation(schema.MutationType.Name), nil
+}
+
+func toObject(o *Object) FullType {
+	var fields []Field
+	for _, f := range o.Fields {
+		var args []InputValue
+		for _, arg := range f.Args {
+			args = append(args, InputValue{
+				Name:         arg.Name,
+				DefaultValue: arg.valOverride,
+				Description:  arg.Description,
+				Type:         &arg.Type,
+			})
+		}
+		fields = append(fields, Field{
+			Args:        args,
+			Description: f.Description,
+			Name:        f.Name,
+			Type:        &f.Type,
+		})
+	}
+
+	return FullType{
+		Kind:        KindObject,
+		Name:        o.Type.RootName(),
+		Description: o.Description,
+		Fields:      fields,
+	}
+}
+
+func toInputObject(o *Object) FullType {
+	var values []InputValue
+	for _, f := range o.Fields {
+		values = append(values, InputValue{
+			DefaultValue: f.valOverride,
+			Description:  f.Description,
+			Name:         f.Name,
+			Type:         &f.Type,
+		})
+	}
+
+	return FullType{
+		Kind:        KindInputObject,
+		Name:        o.Type.RootName(),
+		Description: o.Description,
+		InputFields: values,
+	}
+}
+
+func toUnion(o *Object) FullType {
+	var possible []TypeRef
+	for _, t := range o.PossibleValues {
+		possible = append(possible, t.Type)
+	}
+
+	return FullType{
+		Kind:          KindUnion,
+		Name:          o.Type.RootName(),
+		Description:   o.Description,
+		PossibleTypes: possible,
+	}
+}
+
+func toScalar(o *Object) FullType {
+	return FullType{
+		Kind:        KindScalar,
+		Name:        o.Type.RootName(),
+		Description: o.Description,
+	}
+}
+
+func toEnum(o *Object) FullType {
+	var values []EnumValue
+	for _, v := range o.PossibleValues {
+		values = append(values, EnumValue{
+			Description: v.Description,
+			Name:        v.Name,
+		})
+	}
+
+	return FullType{
+		Kind:        KindEnum,
+		Description: o.Description,
+		Name:        o.Type.RootName(),
+		EnumValues:  values,
+	}
+}
+
+func toInterface(o *Object) FullType {
+	t := toObject(o)
+	t.Kind = KindInterface
+
+	return t
+}
+
+func ToIntrospection(rootQuery *RootQuery, rootMutation *RootMutation) IntrospectionResponse {
+	typeSet := hashset.New()
+	var fullTypes []FullType
+
+	var walkObject func(*Object, string)
+	walkObject = func(o *Object, kind string) {
+		var fullType FullType
+		switch kind {
+		case KindEnum:
+			fullType = toEnum(o)
+		case KindInputObject:
+			fullType = toInputObject(o)
+		case KindObject:
+			fullType = toObject(o)
+		case KindScalar:
+			fullType = toScalar(o)
+		case KindUnion:
+			fullType = toUnion(o)
+		case KindInterface:
+			fullType = toInterface(o)
+		}
+
+		rootName := o.Type.RootName()
+		if !typeSet.Contains(rootName) {
+			typeSet.Add(rootName)
+			fullTypes = append(fullTypes, fullType)
+
+			for _, field := range o.Fields {
+				walkObject(field, field.Type.RootKind())
+			}
+		}
+
+		for _, arg := range o.Args {
+			walkObject(arg, arg.Type.RootKind())
+		}
+
+		for _, v := range o.PossibleValues {
+			walkObject(v, v.Type.RootKind())
+		}
+	}
+
+	rootQueryName := ""
+	if rootQuery != nil {
+		rootQueryName = rootQuery.Name
+		walkObject(&Object{
+			Name:   rootQueryName,
+			Fields: rootQuery.Queries,
+			Type: TypeRef{
+				Name: rootQueryName,
+			},
+		}, KindObject)
+	}
+
+	rootMutationName := ""
+	if rootMutation != nil {
+		rootMutationName = rootMutation.Name
+		walkObject(&Object{
+			Name:   rootMutationName,
+			Fields: rootMutation.Mutations,
+			Type: TypeRef{
+				Name: rootMutationName,
+			},
+		}, KindObject)
+	}
+
+	return IntrospectionResponse{
+		Data: struct {
+			Schema Schema "json:\"__schema\""
+		}{
+			Schema: Schema{
+				MutationType: RootType{Name: rootMutationName},
+				QueryType:    RootType{Name: rootQueryName},
+				Types:        fullTypes,
+			},
+		},
+	}
 }
