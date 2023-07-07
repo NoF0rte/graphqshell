@@ -200,15 +200,20 @@ func (c *Client) newRequest(url string, method string, contentType string, data 
 	return request, nil
 }
 
-func (c *Client) PostJSON(obj *Object) (*Response, error) {
-	query, err := obj.ToGraphQL()
+func (c *Client) PostJSON(obj *Object, vars ...*Variable) (*Response, error) {
+	query, err := obj.ToGraphQL(vars...)
 	if err != nil {
 		return nil, err
 	}
 
+	variables := make(map[string]interface{})
+	for _, v := range vars {
+		variables[v.Name] = v.Value
+	}
+
 	return c.Post(&Request{
 		Name:      obj.Name,
-		Variables: make(map[string]interface{}),
+		Variables: variables,
 		Query:     query,
 	})
 }

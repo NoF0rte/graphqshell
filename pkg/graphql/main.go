@@ -53,11 +53,11 @@ const gqlTemplate string = `
 
 {{- end -}}`
 
-const queryTemplate string = `query {{.Name}} {
+const queryTemplate string = `query {{.Name}}{{printVariables}} {
 {{.Body}}
 }`
 
-const mutationTemplate string = `mutation {{.Name}} {
+const mutationTemplate string = `mutation {{.Name}}{{printVariables}} {
 {{.Body}}
 }`
 
@@ -235,15 +235,7 @@ type TypeRef struct {
 }
 
 func (t TypeRef) IsRequired() bool {
-	if t.Kind == "NON_NULL" {
-		return true
-	}
-
-	if t.OfType != nil {
-		return t.IsRequired()
-	}
-
-	return false
+	return t.Kind == KindNonNull
 }
 
 func (t TypeRef) String() string {
@@ -253,9 +245,9 @@ func (t TypeRef) String() string {
 
 	ofType := t.OfType.String()
 	switch t.Kind {
-	case "NON_NULL":
+	case KindNonNull:
 		return fmt.Sprintf("%s!", ofType)
-	case "LIST":
+	case KindList:
 		return fmt.Sprintf("[%s]", ofType)
 	default:
 		return fmt.Sprintf("%s - %s", t.Kind, ofType)
@@ -468,6 +460,12 @@ func TypeRefFromString(input string, kind string) *TypeRef {
 	}
 }
 
+type Variable struct {
+	Name  string
+	Value interface{}
+	Type  TypeRef
+}
+
 type Object struct {
 	Name           string
 	Description    string
@@ -476,6 +474,7 @@ type Object struct {
 	Fields         []*Object
 	PossibleValues []*Object
 	Parent         *Object
+	Caller         *Object
 	Template       string
 	valFactory     func(string) interface{}
 	valOverride    interface{}
@@ -589,7 +588,7 @@ func (o *Object) GenArg(name string) interface{} {
 	return nil
 }
 
-func (o *Object) ToGraphQL() (string, error) {
+func (o *Object) ToGraphQL(vars ...*Variable) (string, error) {
 	funcMap := template.FuncMap{
 		"isEmpty": func(slice interface{}) bool {
 			tp := reflect.TypeOf(slice).Kind()
@@ -610,13 +609,24 @@ func (o *Object) ToGraphQL() (string, error) {
 			// Indent once
 			return indent(output), nil
 		},
-		"printArgs": func() (string, error) {
+		"printArgs": func() string {
 			var args []string
 			for _, a := range o.Args {
 				arg := a.ToArgStr()
 				args = append(args, arg)
 			}
-			return strings.Join(args, ", "), nil
+			return strings.Join(args, ", ")
+		},
+		"printVariables": func() string {
+			if len(vars) == 0 {
+				return ""
+			}
+
+			var variables []string
+			for _, v := range vars {
+				variables = append(variables, fmt.Sprintf("$%s: %s", v.Name, v.Type.String()))
+			}
+			return fmt.Sprintf("(%s)", strings.Join(variables, ", "))
 		},
 	}
 
@@ -657,6 +667,8 @@ func toArgStr(name string, val interface{}) string {
 			vals = append(vals, toArgStr(key, value))
 		}
 		str = fmt.Sprintf("{%s}", strings.Join(vals, ", "))
+	case *Variable:
+		str = fmt.Sprintf("$%s", t.Name)
 	default:
 		bytes, _ := json.Marshal(&t)
 		str = string(bytes)
@@ -665,7 +677,11 @@ func toArgStr(name string, val interface{}) string {
 }
 
 func (o *Object) ToArgStr() string {
-	return toArgStr(o.Name, o.GenValue())
+	arg := toArgStr(o.Name, o.GenValue())
+	if o.Type.RootKind() == KindEnum && strings.HasPrefix("\"", arg) {
+		arg = arg[1 : len(arg)-1]
+	}
+	return arg
 }
 
 func (o *Object) AddField(field *Object) bool {

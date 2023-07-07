@@ -9,7 +9,6 @@ import (
 
 	"github.com/NoF0rte/graphqshell/pkg/graphql"
 	"github.com/analog-substance/fileutil"
-	"github.com/emirpasic/gods/queues/arrayqueue"
 	"github.com/emirpasic/gods/queues/priorityqueue"
 	"github.com/emirpasic/gods/stacks/arraystack"
 	"github.com/emirpasic/gods/utils"
@@ -19,11 +18,20 @@ import (
 type jobType string
 
 const (
-	fieldJob     jobType = "FIELD"
-	argJob       jobType = "ARG"
-	argFieldJob  jobType = "ARG_FIELD"
-	argTypeJob   jobType = "ARG_TYPE"
-	fieldTypeJob jobType = "FIELD_TYPE"
+	fieldJob        jobType = "FIELD"
+	argJob          jobType = "ARG"
+	argFieldJob     jobType = "ARG_FIELD"
+	argTypeJob      jobType = "ARG_TYPE"
+	argFieldTypeJob jobType = "ARG_FIELD_TYPE"
+	fieldTypeJob    jobType = "FIELD_TYPE"
+)
+
+type Location string
+
+const (
+	locField    Location = "FIELD"
+	locArg      Location = "ARG"
+	locArgField Location = "ARG_FIELD"
 )
 
 type Job struct {
@@ -33,16 +41,22 @@ type Job struct {
 }
 
 var (
-	objCache      map[string]*graphql.Object     = make(map[string]*graphql.Object)
-	fuzzStack     *arraystack.Stack              = arraystack.New()
-	fuzzQueue     *arrayqueue.Queue              = arrayqueue.New()
-	priorityQueue *priorityqueue.Queue           = priorityqueue.NewWith(byPriority)
-	fuzzMutex     *sync.Mutex                    = &sync.Mutex{}
-	deferResolve  map[string][]func(interface{}) = make(map[string][]func(interface{}))
-	resolveStack  *arraystack.Stack              = arraystack.New()
-	ignoreFields  []string                       = []string{
+	objCache     map[string]*graphql.Object     = make(map[string]*graphql.Object)
+	jobQueue     *priorityqueue.Queue           = priorityqueue.NewWith(byPriority)
+	fuzzMutex    *sync.Mutex                    = &sync.Mutex{}
+	deferResolve map[string][]func(interface{}) = make(map[string][]func(interface{}))
+	resolveStack *arraystack.Stack              = arraystack.New()
+	ignoreFields []string                       = []string{
 		"__type",
 		"__schema",
+	}
+
+	knownScalarTypes []string = []string{
+		"Float",
+		"String",
+		"Int",
+		"Boolean",
+		"ID",
 	}
 )
 
@@ -50,33 +64,26 @@ type Result interface {
 	Object() *graphql.Object
 }
 
-type FieldResult struct {
-	Field string
+type FuzzResult struct {
+	Text     string
+	Location Location
 
 	obj *graphql.Object
 }
 
-func (r *FieldResult) Object() *graphql.Object {
+func (r *FuzzResult) Object() *graphql.Object {
 	return r.obj
 }
 
 type TypeResult struct {
-	Type string
-	Kind string
+	Type     string
+	Kind     string
+	Location Location
 
 	obj *graphql.Object
 }
 
 func (r *TypeResult) Object() *graphql.Object {
-	return r.obj
-}
-
-type ArgResult struct {
-	Arg string
-	obj *graphql.Object
-}
-
-func (r *ArgResult) Object() *graphql.Object {
 	return r.obj
 }
 
@@ -109,7 +116,7 @@ func isResolving(name string) bool {
 func push(job *Job) {
 	fuzzMutex.Lock()
 	// fuzzStack.Push(job)
-	priorityQueue.Enqueue(job)
+	jobQueue.Enqueue(job)
 	// fuzzQueue.Enqueue(job)
 	fuzzMutex.Unlock()
 }
@@ -118,9 +125,7 @@ func pop() (*Job, bool) {
 	fuzzMutex.Lock()
 	defer fuzzMutex.Unlock()
 
-	// v, ok := fuzzStack.Pop()
-	// v, ok := fuzzQueue.Dequeue()
-	v, ok := priorityQueue.Dequeue()
+	v, ok := jobQueue.Dequeue()
 	if v == nil {
 		return nil, false
 	}
@@ -129,14 +134,45 @@ func pop() (*Job, bool) {
 }
 
 func getRootObj(o *graphql.Object) *graphql.Object {
-	if o.Parent == nil {
+	if o.Parent == nil && o.Caller == nil {
 		return o
+	}
+
+	if o.Parent == nil {
+		caller := *o.Caller
+		caller.Args = []*graphql.Object{o}
+		return getRootObj(&caller)
 	}
 
 	parent := *o.Parent
 	parent.Fields = []*graphql.Object{o}
 
 	return getRootObj(&parent)
+}
+
+func getMinFields(o *graphql.Object) *graphql.Object {
+	for _, f := range o.Fields {
+		if f.Type.IsScalar() {
+			this := *o
+			this.Fields = []*graphql.Object{f}
+			return &this
+		}
+	}
+
+	if len(o.Fields) == 0 {
+		return nil
+	}
+
+	for _, f := range o.Fields {
+		simple := getMinFields(f)
+		if simple != nil {
+			this := *o
+			this.Fields = []*graphql.Object{simple}
+			return &this
+		}
+	}
+
+	return nil
 }
 
 func assignNewParent(items []*graphql.Object, parent *graphql.Object) []*graphql.Object {
@@ -149,6 +185,18 @@ func assignNewParent(items []*graphql.Object, parent *graphql.Object) []*graphql
 	}
 
 	return newItems
+}
+
+func isKnownScalar(t string) bool {
+	typeRef := graphql.TypeRefFromString(t, "")
+	rootType := typeRef.RootName()
+	for _, known := range knownScalarTypes {
+		if rootType == known {
+			return true
+		}
+	}
+
+	return false
 }
 
 // schemaFuzzCmd represents the fuzz command
@@ -219,17 +267,24 @@ var schemaFuzzCmd = &cobra.Command{
 		requiredArgRe := func(name string) *regexp.Regexp {
 			return regexp.MustCompile(fmt.Sprintf(`Field "%s" argument "(%s)" of type "([^"]+)" is required`, regexp.QuoteMeta(name), graphqlNameRe))
 		}
+		fieldNotDefinedRe := func(name string) *regexp.Regexp {
+			return regexp.MustCompile(fmt.Sprintf(`Field "%s" is not defined by %s`, regexp.QuoteMeta(name), graphqlNameRe))
+		}
+		expectedTypeRe := func(name string) *regexp.Regexp {
+			return regexp.MustCompile(fmt.Sprintf("Expected type ([^,]+), found %s", regexp.QuoteMeta(name)))
+		}
 
 		didYouMeanRe := regexp.MustCompile(`Did you mean.*\?`)
-		graphqlRe := regexp.MustCompile(fmt.Sprintf(`"(%s)(?: .*)?"`, graphqlNameRe))
+		graphqlRe := regexp.MustCompile(fmt.Sprintf(`"?(%s)(?: .*)?"?`, graphqlNameRe))
 
 		rootQuery := &graphql.Object{
 			Name:     "Query",
 			Template: "query {{.Body}}",
 		}
 		push(&Job{
-			Type:   fieldTypeJob,
-			Object: rootQuery,
+			Priority: 100,
+			Type:     fieldTypeJob,
+			Object:   rootQuery,
 		})
 
 		rootMutation := &graphql.Object{
@@ -237,17 +292,28 @@ var schemaFuzzCmd = &cobra.Command{
 			Template: "mutation {{.Body}}",
 		}
 		push(&Job{
-			Type:   fieldTypeJob,
-			Object: rootMutation,
+			Priority: 100,
+			Type:     fieldTypeJob,
+			Object:   rootMutation,
 		})
 
-		fieldWorker := func(o *graphql.Object, words chan string, results chan Result, wg *sync.WaitGroup) {
+		fieldWorker := func(o *graphql.Object, loc Location, words chan string, results chan Result, wg *sync.WaitGroup) {
 			defer wg.Done()
 
 			obj := *o
 
 			fuzzField := &graphql.Object{}
 			obj.Fields = []*graphql.Object{fuzzField}
+
+			re := queryFieldRe
+			if loc == locArgField {
+				fuzzField.Type = graphql.TypeRef{
+					Kind: graphql.KindEnum,
+				}
+				fuzzField.SetValue("graphqshell_arg_field")
+
+				re = fieldNotDefinedRe
+			}
 
 			for word := range words {
 				fuzzField.Name = word
@@ -258,7 +324,15 @@ var schemaFuzzCmd = &cobra.Command{
 					continue
 				}
 
+				handled := false
+				found := false
 				for _, e := range resp.Result.Errors {
+					if !re(word).MatchString(e.Message) {
+						continue
+					}
+
+					handled = true
+
 					didYouMeanMatches := didYouMeanRe.FindStringSubmatch(e.Message)
 					if len(didYouMeanMatches) == 0 {
 						continue
@@ -266,21 +340,32 @@ var schemaFuzzCmd = &cobra.Command{
 
 					allMatches := graphqlRe.FindAllStringSubmatch(didYouMeanMatches[0], -1)
 					for _, matches := range allMatches {
+						found = true
+
 						field := matches[1]
 						if shouldIgnoreField(field) {
 							continue
 						}
 
-						results <- &FieldResult{
-							Field: field,
-							obj:   o,
+						results <- &FuzzResult{
+							Text:     field,
+							Location: locField,
+							obj:      o,
 						}
+					}
+				}
+
+				// Can happen when the word is an exact match
+				if !handled && !found {
+					results <- &FuzzResult{
+						Text:     word,
+						Location: loc,
+						obj:      o,
 					}
 				}
 			}
 		}
-
-		fuzzFields := func(o *graphql.Object) chan Result {
+		fuzzFields := func(o *graphql.Object, loc Location) chan Result {
 			c := make(chan Result)
 
 			go func() {
@@ -288,7 +373,7 @@ var schemaFuzzCmd = &cobra.Command{
 				words := getWords()
 				for i := 0; i < threads; i++ {
 					wg.Add(1)
-					go fieldWorker(o, words, c, wg)
+					go fieldWorker(o, loc, words, c, wg)
 				}
 
 				wg.Wait()
@@ -298,29 +383,13 @@ var schemaFuzzCmd = &cobra.Command{
 			return c
 		}
 
-		processArgResp := func(o *graphql.Object, resp *graphql.Response, results chan Result) {
-			for _, e := range resp.Result.Errors {
-				didYouMeanMatches := didYouMeanRe.FindStringSubmatch(e.Message)
-				if len(didYouMeanMatches) == 0 {
-					continue
-				}
-
-				allMatches := graphqlRe.FindAllStringSubmatch(didYouMeanMatches[0], -1)
-				for _, matches := range allMatches {
-					results <- &FieldResult{
-						Field: matches[1],
-						obj:   o,
-					}
-				}
-			}
-		}
 		argsWorker := func(o *graphql.Object, words chan string, results chan Result, wg *sync.WaitGroup) {
 			defer wg.Done()
 
 			obj := *o
 
 			obj.Fields = []*graphql.Object{
-				{Name: "graphqlshell"},
+				{Name: "graphqlshell_field"},
 			}
 
 			fuzzArg := &graphql.Object{}
@@ -335,7 +404,39 @@ var schemaFuzzCmd = &cobra.Command{
 					continue
 				}
 
-				processArgResp(o, resp, results)
+				handled := false
+				found := false
+				unknownArgRe := regexp.MustCompile(fmt.Sprintf(`Unknown argument "%s"`, word))
+				for _, e := range resp.Result.Errors {
+					if !unknownArgRe.MatchString(e.Message) {
+						continue
+					}
+
+					handled = true
+					didYouMeanMatches := didYouMeanRe.FindStringSubmatch(e.Message)
+					if len(didYouMeanMatches) == 0 {
+						continue
+					}
+
+					allMatches := graphqlRe.FindAllStringSubmatch(didYouMeanMatches[0], -1)
+					for _, matches := range allMatches {
+						found = true
+						results <- &FuzzResult{
+							Text:     matches[1],
+							Location: locArg,
+							obj:      o,
+						}
+					}
+				}
+
+				// Can happen when the word is an exact match
+				if !handled && !found {
+					results <- &FuzzResult{
+						Text:     word,
+						Location: locArg,
+						obj:      o,
+					}
+				}
 			}
 		}
 		fuzzArgs := func(o *graphql.Object) chan Result {
@@ -344,7 +445,7 @@ var schemaFuzzCmd = &cobra.Command{
 			go func() {
 				obj := *o
 				obj.Fields = append(obj.Fields, &graphql.Object{
-					Name: "graphqshell",
+					Name: "graphqshell_field",
 				})
 
 				resp, err := client.PostJSON(&obj)
@@ -357,9 +458,10 @@ var schemaFuzzCmd = &cobra.Command{
 							continue
 						}
 
-						c <- &ArgResult{
-							Arg: matches[0][1],
-							obj: o,
+						c <- &FuzzResult{
+							Text:     matches[0][1],
+							Location: locArg,
+							obj:      o,
 						}
 					}
 				}
@@ -378,14 +480,14 @@ var schemaFuzzCmd = &cobra.Command{
 			return c
 		}
 
-		determineType := func(o *graphql.Object) chan Result {
+		determineFieldType := func(o *graphql.Object) chan Result {
 			c := make(chan Result)
 
 			obj := *o
 			go func() {
 				defer close(c)
 
-				name := "graphqlshell"
+				name := "graphqlshell_field"
 				obj.Fields = append(obj.Fields, &graphql.Object{
 					Name: name,
 				})
@@ -397,8 +499,9 @@ var schemaFuzzCmd = &cobra.Command{
 				}
 
 				result := &TypeResult{
-					obj:  o,
-					Kind: graphql.KindObject,
+					Location: locField,
+					Kind:     graphql.KindObject,
+					obj:      o,
 				}
 
 				for _, e := range resp.Result.Errors {
@@ -451,6 +554,103 @@ var schemaFuzzCmd = &cobra.Command{
 
 			return c
 		}
+		determineArgType := func(o *graphql.Object) chan Result {
+			c := make(chan Result)
+
+			obj := *o
+			go func() {
+				defer close(c)
+
+				caller := getMinFields(obj.Caller)
+				if caller == nil {
+					push(&Job{
+						Priority: 20,
+						Type:     argTypeJob,
+						Object:   o,
+					})
+					return
+				}
+
+				name := "graphqshell_arg"
+				obj.SetValue(name)
+
+				// obj.Fields = append(obj.Fields, &graphql.Object{
+				// 	Name: name,
+				// })
+
+				resp, err := client.PostJSON(getRootObj(&obj))
+				if err != nil {
+					fmt.Printf("[!] Error posting: %v\n", err)
+					return
+				}
+
+				result := &TypeResult{
+					Location: locArg,
+					Kind:     graphql.KindObject,
+					obj:      o,
+				}
+
+				for _, e := range resp.Result.Errors {
+					matches := expectedTypeRe(name).FindAllStringSubmatch(e.Message, -1)
+					if len(matches) > 0 {
+						result.Type = matches[0][1]
+						break
+					}
+
+					matches = noSubfieldsRe(obj.Name).FindAllStringSubmatch(e.Message, -1)
+
+					if len(matches) == 0 {
+						continue
+					}
+
+					result.Type = matches[0][1]
+					break
+				}
+
+				if isKnownScalar(result.Type) {
+					result.Kind = graphql.KindScalar
+				}
+
+				if result.Type == "" {
+					obj.Fields = []*graphql.Object{}
+
+					rootObj := getRootObj(&obj)
+					resp, err = client.PostJSON(rootObj)
+					if err != nil {
+						fmt.Printf("[!] Error posting: %v\n", err)
+						return
+					}
+
+					for _, e := range resp.Result.Errors {
+						matches := fieldOfTypeRe(obj.Name).FindAllStringSubmatch(e.Message, -1)
+						if len(matches) == 0 {
+							continue
+						}
+
+						result.Type = matches[0][1]
+						break
+					}
+
+					if result.Type == "" {
+						return
+					}
+				}
+
+				c <- result
+			}()
+
+			return c
+		}
+		determineArgFieldType := func(o *graphql.Object) chan Result {
+			c := make(chan Result)
+
+			obj := *o
+			go func() {
+
+			}()
+
+			return c
+		}
 
 		for {
 			job, ok := pop()
@@ -464,62 +664,69 @@ var schemaFuzzCmd = &cobra.Command{
 			switch job.Type {
 			case fieldJob:
 				resolveStack.Push(job.Object.Type.RootName())
-				results = fuzzFields(job.Object)
+				results = fuzzFields(job.Object, locField)
 			case fieldTypeJob:
-				results = determineType(job.Object)
+				results = determineFieldType(job.Object)
 			case argJob:
 				results = fuzzArgs(job.Object)
+			case argTypeJob:
+				results = determineArgType(job.Object)
+			case argFieldJob:
+				resolveStack.Push(job.Object.Type.RootName())
+				results = fuzzFields(job.Object, locArgField)
+			case argFieldTypeJob:
+				results = determineArgFieldType(job.Object)
 			default:
 				panic(fmt.Sprintf("Unknown job type: %s", job.Type))
 			}
 
-			// Queue objects to get fuzzed
-			// 1. Fuzz fields
-			// 2. Fuzz args
-			// 3. Get field types and queue to be fuzzed
-			// 4. Get arg types and queue to be fuzzed
 			for result := range results {
-
 				obj := result.Object()
+
 				switch r := result.(type) {
-				case *FieldResult:
-					field := &graphql.Object{
-						Name:   r.Field,
+				case *FuzzResult:
+					fuzzed := &graphql.Object{
+						Name:   r.Text,
 						Parent: obj,
 					}
-					if obj.AddField(field) {
-						push(&Job{
-							Priority: 100,
-							Type:     fieldTypeJob,
-							Object:   field,
-						})
-						fmt.Printf("[%s] Found field: %s.%s\n", job.Type, obj.Name, field.Name)
-						// push(&Job{
-						// 	Type:   argJob,
-						// 	Object: field,
-						// })
-					}
-				case *ArgResult:
-					arg := &graphql.Object{
-						Name: r.Arg,
-					}
 
-					if obj.AddArg(arg) {
-						push(&Job{
-							Type:   argFieldJob,
-							Object: arg,
-						})
+					if r.Location == locArg {
+						if obj.AddArg(fuzzed) {
+							fmt.Printf("[%s] Found arg: %s.%s(%s)\n", job.Type, obj.Parent.Name, obj.Name, fuzzed.Name)
 
-						push(&Job{
-							Type:   argFieldJob,
-							Object: arg,
-						})
+							push(&Job{
+								Priority: 50,
+								Type:     argTypeJob,
+								Object:   fuzzed,
+							})
+						}
+					} else if obj.AddField(fuzzed) {
+						fmt.Printf("[%s] Found %s: %s.%s\n", job.Type, r.Location, obj.Name, fuzzed.Name)
+
+						if r.Location == locField {
+							push(&Job{
+								Priority: 100,
+								Type:     fieldTypeJob,
+								Object:   fuzzed,
+							})
+							push(&Job{
+								Priority: 55,
+								Type:     argJob,
+								Object:   fuzzed,
+							})
+						} else {
+							push(&Job{
+								Priority: 75,
+								Type:     argFieldTypeJob,
+								Object:   fuzzed,
+							})
+						}
 					}
 				case *TypeResult:
 					if obj.Name == rootQuery.Name || obj.Name == rootMutation.Name {
 						obj.Name = r.Type
 					} else {
-						fmt.Printf("[%s] Found type: %s.%s %s\n", job.Type, obj.Parent.Name, obj.Name, r.Type)
+						fmt.Printf("[%s] Found %s type: %s.%s %s\n", job.Type, r.Location, obj.Parent.Name, obj.Name, r.Type)
 
 						ref := graphql.TypeRefFromString(r.Type, r.Kind)
 						obj.Type = *ref
@@ -547,15 +754,24 @@ var schemaFuzzCmd = &cobra.Command{
 						}
 					}
 
-					push(&Job{
-						Type:   fieldJob,
-						Object: obj,
-					})
-					// push args
+					switch r.Location {
+					case locField:
+						push(&Job{
+							Priority: 25,
+							Type:     fieldJob,
+							Object:   obj,
+						})
+					case locArg, locArgField:
+						push(&Job{
+							Priority: 30,
+							Type:     argFieldJob,
+							Object:   obj,
+						})
+					}
 				}
 			}
 
-			if job.Type != fieldTypeJob {
+			if job.Type == fieldJob || job.Type == argFieldJob {
 				resolveStack.Pop()
 
 				rootName := job.Object.Type.RootName()
