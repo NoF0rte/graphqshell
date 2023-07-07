@@ -58,6 +58,9 @@ var (
 		"Boolean",
 		"ID",
 	}
+
+	rootQuery    *graphql.Object
+	rootMutation *graphql.Object
 )
 
 type Result interface {
@@ -134,7 +137,7 @@ func pop() (*Job, bool) {
 }
 
 func getRootObj(o *graphql.Object) *graphql.Object {
-	if o.Parent == nil && o.Caller == nil {
+	if (o.Parent == rootQuery || o.Parent == rootMutation || o.Parent == nil) && o.Caller == nil {
 		return o
 	}
 
@@ -274,10 +277,12 @@ var schemaFuzzCmd = &cobra.Command{
 			return regexp.MustCompile(fmt.Sprintf("Expected type ([^,]+), found %s", regexp.QuoteMeta(name)))
 		}
 
-		didYouMeanRe := regexp.MustCompile(`Did you mean.*\?`)
-		graphqlRe := regexp.MustCompile(fmt.Sprintf(`"?(%s)(?: .*)?"?`, graphqlNameRe))
+		didYouMeanRe := regexp.MustCompile(`Did you mean (.*)\?`)
+		// graphqlRe := regexp.MustCompile(fmt.Sprintf(`"(%s)(?: .*)?"`, graphqlNameRe))
+		graphqlRe := regexp.MustCompile(graphqlNameRe)
+		orRe := regexp.MustCompile(" or ")
 
-		rootQuery := &graphql.Object{
+		rootQuery = &graphql.Object{
 			Name:     "Query",
 			Template: "query {{.Body}}",
 		}
@@ -287,7 +292,7 @@ var schemaFuzzCmd = &cobra.Command{
 			Object:   rootQuery,
 		})
 
-		rootMutation := &graphql.Object{
+		rootMutation = &graphql.Object{
 			Name:     "Mutation",
 			Template: "mutation {{.Body}}",
 		}
@@ -338,18 +343,19 @@ var schemaFuzzCmd = &cobra.Command{
 						continue
 					}
 
-					allMatches := graphqlRe.FindAllStringSubmatch(didYouMeanMatches[0], -1)
-					for _, matches := range allMatches {
+					suggestions := didYouMeanMatches[1]
+					suggestions = orRe.ReplaceAllString(suggestions, " ")
+					matches := graphqlRe.FindAllString(suggestions, -1)
+					for _, field := range matches {
 						found = true
 
-						field := matches[1]
 						if shouldIgnoreField(field) {
 							continue
 						}
 
 						results <- &FuzzResult{
 							Text:     field,
-							Location: locField,
+							Location: loc,
 							obj:      o,
 						}
 					}
@@ -382,6 +388,29 @@ var schemaFuzzCmd = &cobra.Command{
 
 			return c
 		}
+
+		// shallowCopy := func(o *graphql.Object) *graphql.Object {
+		// 	args := make([]*graphql.Object, len(o.Args))
+		// 	copy(args, o.Args)
+
+		// 	fields := make([]*graphql.Object, len(o.Fields))
+		// 	copy(fields, o.Fields)
+
+		// 	possibleValues := make([]*graphql.Object, len(o.PossibleValues))
+		// 	copy(possibleValues, o.PossibleValues)
+
+		// 	return &graphql.Object{
+		// 		Name:           o.Name,
+		// 		Description:    o.Description,
+		// 		Type:           o.Type,
+		// 		Args:           args,
+		// 		Fields:         fields,
+		// 		PossibleValues: possibleValues,
+		// 		Parent:         o.Parent,
+		// 		Caller:         o.Caller,
+		// 		Template:       o.Template,
+		// 	}
+		// }
 
 		argsWorker := func(o *graphql.Object, words chan string, results chan Result, wg *sync.WaitGroup) {
 			defer wg.Done()
@@ -418,11 +447,17 @@ var schemaFuzzCmd = &cobra.Command{
 						continue
 					}
 
-					allMatches := graphqlRe.FindAllStringSubmatch(didYouMeanMatches[0], -1)
-					for _, matches := range allMatches {
+					suggestions := didYouMeanMatches[1]
+					suggestions = orRe.ReplaceAllString(suggestions, " ")
+					if len(didYouMeanMatches) == 0 {
+						continue
+					}
+
+					matches := graphqlRe.FindAllString(suggestions, -1)
+					for _, arg := range matches {
 						found = true
 						results <- &FuzzResult{
-							Text:     matches[1],
+							Text:     arg,
 							Location: locArg,
 							obj:      o,
 						}
@@ -571,8 +606,13 @@ var schemaFuzzCmd = &cobra.Command{
 					return
 				}
 
+				obj.Caller = caller
+
 				name := "graphqshell_arg"
 				obj.SetValue(name)
+				obj.Type = graphql.TypeRef{
+					Kind: graphql.KindEnum,
+				}
 
 				// obj.Fields = append(obj.Fields, &graphql.Object{
 				// 	Name: name,
@@ -598,7 +638,6 @@ var schemaFuzzCmd = &cobra.Command{
 					}
 
 					matches = noSubfieldsRe(obj.Name).FindAllStringSubmatch(e.Message, -1)
-
 					if len(matches) == 0 {
 						continue
 					}
@@ -644,9 +683,9 @@ var schemaFuzzCmd = &cobra.Command{
 		determineArgFieldType := func(o *graphql.Object) chan Result {
 			c := make(chan Result)
 
-			obj := *o
+			// obj := *o
 			go func() {
-
+				defer close(c)
 			}()
 
 			return c
@@ -692,6 +731,9 @@ var schemaFuzzCmd = &cobra.Command{
 
 					if r.Location == locArg {
 						if obj.AddArg(fuzzed) {
+							fuzzed.Parent = nil
+							fuzzed.Caller = obj
+
 							fmt.Printf("[%s] Found arg: %s.%s(%s)\n", job.Type, obj.Parent.Name, obj.Name, fuzzed.Name)
 
 							push(&Job{
@@ -709,11 +751,11 @@ var schemaFuzzCmd = &cobra.Command{
 								Type:     fieldTypeJob,
 								Object:   fuzzed,
 							})
-							push(&Job{
-								Priority: 55,
-								Type:     argJob,
-								Object:   fuzzed,
-							})
+							// push(&Job{
+							// 	Priority: 55,
+							// 	Type:     argJob,
+							// 	Object:   fuzzed,
+							// })
 						} else {
 							push(&Job{
 								Priority: 75,
@@ -726,7 +768,12 @@ var schemaFuzzCmd = &cobra.Command{
 					if obj.Name == rootQuery.Name || obj.Name == rootMutation.Name {
 						obj.Name = r.Type
 					} else {
-						fmt.Printf("[%s] Found %s type: %s.%s %s\n", job.Type, r.Location, obj.Parent.Name, obj.Name, r.Type)
+						parent := obj.Parent
+						if parent == nil {
+							parent = obj.Caller
+						}
+
+						fmt.Printf("[%s] Found %s type: %s.%s %s\n", job.Type, r.Location, parent.Name, obj.Name, r.Type)
 
 						ref := graphql.TypeRefFromString(r.Type, r.Kind)
 						obj.Type = *ref
@@ -782,7 +829,29 @@ var schemaFuzzCmd = &cobra.Command{
 
 				delete(deferResolve, rootName)
 
+				if job.Type == fieldJob && job.Object.Parent != nil {
+					push(&Job{
+						Priority: 55,
+						Type:     argJob,
+						Object:   job.Object,
+					})
+				}
+
 				objCache[rootName] = job.Object
+
+				if job.Object.Name == rootQuery.Name {
+					for _, f := range rootQuery.Fields {
+						f.Template = graphql.QueryTemplate
+						// f.Parent = nil
+					}
+				}
+
+				if job.Object.Name == rootMutation.Name {
+					for _, f := range rootMutation.Fields {
+						f.Template = graphql.MutationTemplate
+						// f.Parent = nil
+					}
+				}
 			}
 		}
 

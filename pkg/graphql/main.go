@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"reflect"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -53,11 +54,11 @@ const gqlTemplate string = `
 
 {{- end -}}`
 
-const queryTemplate string = `query {{.Name}}{{printVariables}} {
+const QueryTemplate string = `query {{.Name}}{{printVariables}} {
 {{.Body}}
 }`
 
-const mutationTemplate string = `mutation {{.Name}}{{printVariables}} {
+const MutationTemplate string = `mutation {{.Name}}{{printVariables}} {
 {{.Body}}
 }`
 
@@ -73,6 +74,7 @@ var (
 	valCache     map[string]interface{}         = make(map[string]interface{})
 	deferResolve map[string][]func(interface{}) = make(map[string][]func(interface{}))
 	resolveStack *arraystack.Stack              = arraystack.New()
+	argMutex     *sync.Mutex                    = &sync.Mutex{}
 
 	Debug bool = false
 )
@@ -601,7 +603,7 @@ func (o *Object) ToGraphQL(vars ...*Variable) (string, error) {
 			}
 		},
 		"toGraphQL": func(obj *Object) (string, error) {
-			output, err := obj.ToGraphQL()
+			output, err := obj.ToGraphQL(vars...)
 			if err != nil {
 				return "", err
 			}
@@ -612,7 +614,10 @@ func (o *Object) ToGraphQL(vars ...*Variable) (string, error) {
 		"printArgs": func() string {
 			var args []string
 			for _, a := range o.Args {
+				argMutex.Lock()
 				arg := a.ToArgStr()
+				argMutex.Unlock()
+
 				args = append(args, arg)
 			}
 			return strings.Join(args, ", ")
@@ -641,7 +646,7 @@ func (o *Object) ToGraphQL(vars ...*Variable) (string, error) {
 
 	output := buf.String()
 	if o.Template != "" {
-		bodyTemplate := template.Must(template.New("body").Parse(o.Template))
+		bodyTemplate := template.Must(template.New("body").Funcs(funcMap).Parse(o.Template))
 
 		buf.Reset()
 		err = bodyTemplate.Execute(buf, bodyContext{
@@ -678,8 +683,14 @@ func toArgStr(name string, val interface{}) string {
 
 func (o *Object) ToArgStr() string {
 	arg := toArgStr(o.Name, o.GenValue())
-	if o.Type.RootKind() == KindEnum && strings.HasPrefix("\"", arg) {
-		arg = arg[1 : len(arg)-1]
+	if o.Type.RootKind() == KindEnum {
+		name, val, _ := strings.Cut(arg, ":")
+		val = strings.TrimSpace(val)
+
+		if strings.HasPrefix(val, "\"") {
+			val = val[1 : len(val)-1]
+			arg = fmt.Sprintf("%s: %s", name, val)
+		}
 	}
 	return arg
 }
@@ -755,7 +766,7 @@ func newRootQuery(name string) *RootQuery {
 
 		obj := field.Resolve()
 		if obj != nil {
-			obj.Template = queryTemplate
+			obj.Template = QueryTemplate
 			queries = append(queries, obj)
 		}
 	}
@@ -802,7 +813,7 @@ func newRootMutation(name string) *RootMutation {
 
 		mutation := field.Resolve()
 		if mutation != nil {
-			mutation.Template = mutationTemplate
+			mutation.Template = MutationTemplate
 			mutations = append(mutations, mutation)
 		}
 	}
