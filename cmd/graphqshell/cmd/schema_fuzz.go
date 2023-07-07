@@ -276,6 +276,9 @@ var schemaFuzzCmd = &cobra.Command{
 		expectedTypeRe := func(name string) *regexp.Regexp {
 			return regexp.MustCompile(fmt.Sprintf("Expected type ([^,]+), found %s", regexp.QuoteMeta(name)))
 		}
+		expectingTypeRe := func(variable *graphql.Variable) *regexp.Regexp {
+			return regexp.MustCompile(fmt.Sprintf(`Variable "\$%s" of type "%s" used in position expecting type "([^"]+)"`, regexp.QuoteMeta(variable.Name), regexp.QuoteMeta(variable.Type.String())))
+		}
 
 		didYouMeanRe := regexp.MustCompile(`Did you mean (.*)\?`)
 		// graphqlRe := regexp.MustCompile(fmt.Sprintf(`"(%s)(?: .*)?"`, graphqlNameRe))
@@ -609,16 +612,22 @@ var schemaFuzzCmd = &cobra.Command{
 				obj.Caller = caller
 
 				name := "graphqshell_arg"
-				obj.SetValue(name)
-				obj.Type = graphql.TypeRef{
-					Kind: graphql.KindEnum,
+
+				variable := &graphql.Variable{
+					Name:  "var",
+					Value: name,
+					Type: graphql.TypeRef{
+						Name: name,
+					},
 				}
+
+				obj.SetValue(variable)
 
 				// obj.Fields = append(obj.Fields, &graphql.Object{
 				// 	Name: name,
 				// })
 
-				resp, err := client.PostJSON(getRootObj(&obj))
+				resp, err := client.PostJSON(getRootObj(&obj), variable)
 				if err != nil {
 					fmt.Printf("[!] Error posting: %v\n", err)
 					return
@@ -631,18 +640,19 @@ var schemaFuzzCmd = &cobra.Command{
 				}
 
 				for _, e := range resp.Result.Errors {
-					matches := expectedTypeRe(name).FindAllStringSubmatch(e.Message, -1)
+					matches := expectingTypeRe(variable).FindStringSubmatch(e.Message)
 					if len(matches) > 0 {
-						result.Type = matches[0][1]
+						result.Type = matches[1]
 						break
 					}
 
-					matches = noSubfieldsRe(obj.Name).FindAllStringSubmatch(e.Message, -1)
+					matches = expectedTypeRe(name).FindStringSubmatch(e.Message)
 					if len(matches) == 0 {
+						fmt.Println("Type not found")
 						continue
 					}
 
-					result.Type = matches[0][1]
+					result.Type = matches[1]
 					break
 				}
 
