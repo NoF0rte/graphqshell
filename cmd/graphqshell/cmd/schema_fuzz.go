@@ -18,12 +18,15 @@ import (
 type jobType string
 
 const (
-	fieldJob        jobType = "FIELD"
-	argJob          jobType = "ARG"
-	argFieldJob     jobType = "ARG_FIELD"
-	argTypeJob      jobType = "ARG_TYPE"
-	argFieldTypeJob jobType = "ARG_FIELD_TYPE"
-	fieldTypeJob    jobType = "FIELD_TYPE"
+	fieldJob             jobType = "FIELD"
+	enumJob              jobType = "ENUM"
+	argJob               jobType = "ARG"
+	argFieldJob          jobType = "ARG_FIELD"
+	argTypeJob           jobType = "ARG_TYPE"
+	argFieldTypeJob      jobType = "ARG_FIELD_TYPE"
+	fieldTypeJob         jobType = "FIELD_TYPE"
+	requiredArgsJob      jobType = "REQUIRED_ARGS"
+	requiredArgFieldsJob jobType = "REQUIRED_ARG_FIELDS"
 )
 
 type Location string
@@ -32,6 +35,7 @@ const (
 	locField    Location = "FIELD"
 	locArg      Location = "ARG"
 	locArgField Location = "ARG_FIELD"
+	locEnum     Location = "ENUM"
 )
 
 type Job struct {
@@ -90,6 +94,18 @@ func (r *TypeResult) Object() *graphql.Object {
 	return r.obj
 }
 
+type RequiredResult struct {
+	Text     string
+	Type     string
+	Location Location
+
+	obj *graphql.Object
+}
+
+func (r *RequiredResult) Object() *graphql.Object {
+	return r.obj
+}
+
 func byPriority(a, b interface{}) int {
 	priorityA := a.(*Job).Priority
 	priorityB := b.(*Job).Priority
@@ -143,7 +159,15 @@ func getRootObj(o *graphql.Object) *graphql.Object {
 
 	if o.Parent == nil {
 		caller := *o.Caller
-		caller.Args = []*graphql.Object{o}
+
+		args := []*graphql.Object{o}
+		for _, arg := range caller.Args {
+			if arg.Name != o.Name && arg.Type.IsRequired() {
+				args = append(args, arg)
+			}
+		}
+
+		caller.Args = args
 		return getRootObj(&caller)
 	}
 
@@ -151,6 +175,14 @@ func getRootObj(o *graphql.Object) *graphql.Object {
 	parent.Fields = []*graphql.Object{o}
 
 	return getRootObj(&parent)
+}
+
+func getCallerObj(o *graphql.Object) *graphql.Object {
+	if o.Caller != nil {
+		return o.Caller
+	}
+
+	return getCallerObj(o.Parent)
 }
 
 func getMinFields(o *graphql.Object) *graphql.Object {
@@ -244,6 +276,7 @@ var schemaFuzzCmd = &cobra.Command{
 			return
 		}
 
+		// Add words found
 		getWords := func() chan string {
 			c := make(chan string)
 			go func() {
@@ -269,6 +302,9 @@ var schemaFuzzCmd = &cobra.Command{
 		}
 		requiredArgRe := func(name string) *regexp.Regexp {
 			return regexp.MustCompile(fmt.Sprintf(`Field "%s" argument "(%s)" of type "([^"]+)" is required`, regexp.QuoteMeta(name), graphqlNameRe))
+		}
+		requiredArgFieldRe := func(t string) *regexp.Regexp {
+			return regexp.MustCompile(fmt.Sprintf(`Field %s\.(%s) of required type (.*?) was not provided`, regexp.QuoteMeta(t), graphqlNameRe))
 		}
 		fieldNotDefinedRe := func(name string) *regexp.Regexp {
 			return regexp.MustCompile(fmt.Sprintf(`Field "%s" is not defined by %s`, regexp.QuoteMeta(name), graphqlNameRe))
@@ -392,29 +428,6 @@ var schemaFuzzCmd = &cobra.Command{
 			return c
 		}
 
-		// shallowCopy := func(o *graphql.Object) *graphql.Object {
-		// 	args := make([]*graphql.Object, len(o.Args))
-		// 	copy(args, o.Args)
-
-		// 	fields := make([]*graphql.Object, len(o.Fields))
-		// 	copy(fields, o.Fields)
-
-		// 	possibleValues := make([]*graphql.Object, len(o.PossibleValues))
-		// 	copy(possibleValues, o.PossibleValues)
-
-		// 	return &graphql.Object{
-		// 		Name:           o.Name,
-		// 		Description:    o.Description,
-		// 		Type:           o.Type,
-		// 		Args:           args,
-		// 		Fields:         fields,
-		// 		PossibleValues: possibleValues,
-		// 		Parent:         o.Parent,
-		// 		Caller:         o.Caller,
-		// 		Template:       o.Template,
-		// 	}
-		// }
-
 		argsWorker := func(o *graphql.Object, words chan string, results chan Result, wg *sync.WaitGroup) {
 			defer wg.Done()
 
@@ -485,24 +498,6 @@ var schemaFuzzCmd = &cobra.Command{
 				obj.Fields = append(obj.Fields, &graphql.Object{
 					Name: "graphqshell_field",
 				})
-
-				resp, err := client.PostJSON(&obj)
-				if err != nil {
-					fmt.Printf("[!] Error posting: %v\n", err)
-				} else {
-					for _, e := range resp.Result.Errors {
-						matches := requiredArgRe(obj.Name).FindAllStringSubmatch(e.Message, -1)
-						if len(matches) == 0 {
-							continue
-						}
-
-						c <- &FuzzResult{
-							Text:     matches[0][1],
-							Location: locArg,
-							obj:      o,
-						}
-					}
-				}
 
 				wg := &sync.WaitGroup{}
 				words := getWords()
@@ -592,110 +587,213 @@ var schemaFuzzCmd = &cobra.Command{
 
 			return c
 		}
-		determineArgType := func(o *graphql.Object) chan Result {
+		determineArgType := func(o *graphql.Object, loc Location) chan Result {
 			c := make(chan Result)
 
 			obj := *o
 			go func() {
 				defer close(c)
 
-				caller := getMinFields(obj.Caller)
-				if caller == nil {
-					push(&Job{
-						Priority: 20,
-						Type:     argTypeJob,
-						Object:   o,
-					})
-					return
-				}
-
-				obj.Caller = caller
-
-				name := "graphqshell_arg"
-
-				variable := &graphql.Variable{
-					Name:  "var",
-					Value: name,
-					Type: graphql.TypeRef{
-						Name: name,
-					},
-				}
-
-				obj.SetValue(variable)
-
-				// obj.Fields = append(obj.Fields, &graphql.Object{
-				// 	Name: name,
-				// })
-
-				resp, err := client.PostJSON(getRootObj(&obj), variable)
-				if err != nil {
-					fmt.Printf("[!] Error posting: %v\n", err)
-					return
-				}
-
 				result := &TypeResult{
-					Location: locArg,
+					Location: loc,
 					Kind:     graphql.KindObject,
 					obj:      o,
 				}
 
-				for _, e := range resp.Result.Errors {
-					matches := expectingTypeRe(variable).FindStringSubmatch(e.Message)
-					if len(matches) > 0 {
-						result.Type = matches[1]
-						break
+				var rootObj *graphql.Object
+				if loc == locArgField {
+					caller := getCallerObj(&obj)
+					caller = getMinFields(caller)
+
+					// Need to correctly pass in the lowest obj
+					rootObj = getRootObj(caller)
+				} else {
+					caller := getMinFields(obj.Caller)
+					if caller == nil {
+						push(&Job{
+							Priority: 20,
+							Type:     argTypeJob,
+							Object:   o,
+						})
+						return
 					}
 
-					matches = expectedTypeRe(name).FindStringSubmatch(e.Message)
-					if len(matches) == 0 {
-						fmt.Println("Type not found")
-						continue
+					obj.Caller = caller
+
+					rootObj = getRootObj(&obj)
+				}
+
+				name := "graphqshell_arg"
+
+				// If the type is partially filled out, then the arg is probably a required arg
+				if obj.Type.RootName() != "" {
+					result.Type = obj.Type.String()
+
+					// // If the object has fields, we know it is an object
+					// if len(obj.Fields) > 0 {
+					// 	c <- result
+					// 	return
+					// }
+				} else {
+					variable := &graphql.Variable{
+						Name:  obj.Name,
+						Value: name,
+						Type: graphql.TypeRef{
+							Name: name,
+						},
 					}
+					obj.SetValue(variable)
 
-					result.Type = matches[1]
-					break
-				}
+					// obj.Fields = append(obj.Fields, &graphql.Object{
+					// 	Name: name,
+					// })
 
-				if isKnownScalar(result.Type) {
-					result.Kind = graphql.KindScalar
-				}
-
-				if result.Type == "" {
-					obj.Fields = []*graphql.Object{}
-
-					rootObj := getRootObj(&obj)
-					resp, err = client.PostJSON(rootObj)
+					resp, err := client.PostJSON(rootObj, variable)
 					if err != nil {
 						fmt.Printf("[!] Error posting: %v\n", err)
 						return
 					}
 
 					for _, e := range resp.Result.Errors {
-						matches := fieldOfTypeRe(obj.Name).FindAllStringSubmatch(e.Message, -1)
+						matches := expectingTypeRe(variable).FindStringSubmatch(e.Message)
+						if len(matches) > 0 {
+							result.Type = matches[1]
+							break
+						}
+
+						matches = expectedTypeRe(name).FindStringSubmatch(e.Message)
 						if len(matches) == 0 {
+							fmt.Println("Type not found")
 							continue
 						}
 
-						result.Type = matches[0][1]
+						result.Type = matches[1]
 						break
 					}
+				}
 
-					if result.Type == "" {
+				if isKnownScalar(result.Type) {
+					result.Kind = graphql.KindScalar
+				} else if len(obj.Fields) == 0 {
+					typeRef := graphql.TypeRefFromString(result.Type, "")
+
+					variable := &graphql.Variable{
+						Name:  obj.Name,
+						Value: map[string]interface{}{},
+						Type:  *typeRef,
+					}
+					obj.SetValue(variable)
+
+					resp, err := client.PostJSON(rootObj, variable)
+					if err != nil {
+						fmt.Printf("[!] Error posting: %v\n", err)
 						return
 					}
+
+					enumRe := regexp.MustCompile(` [Ee]nums? `)
+					for _, e := range resp.Result.Errors {
+						if enumRe.MatchString(e.Message) {
+							result.Kind = graphql.KindEnum
+							break
+						}
+						if strings.Contains(e.Message, "must be a string") {
+							result.Kind = graphql.KindScalar
+							break
+						}
+					}
+
+					// Determine if it is a scalar or enum
+					// If neither, assume object
+					// Fuzz fields on the "object"
+					// If no fields are found try fuzzing enum values
+					// If no values found or no indication that it is an enum, maybe assume it is a scalar?
 				}
+
+				// if result.Type == "" {
+				// 	obj.Fields = []*graphql.Object{}
+
+				// 	rootObj := getRootObj(&obj)
+				// 	resp, err = client.PostJSON(rootObj)
+				// 	if err != nil {
+				// 		fmt.Printf("[!] Error posting: %v\n", err)
+				// 		return
+				// 	}
+
+				// 	for _, e := range resp.Result.Errors {
+				// 		matches := fieldOfTypeRe(obj.Name).FindAllStringSubmatch(e.Message, -1)
+				// 		if len(matches) == 0 {
+				// 			continue
+				// 		}
+
+				// 		result.Type = matches[0][1]
+				// 		break
+				// 	}
+
+				// 	if result.Type == "" {
+				// 		return
+				// 	}
+				// }
 
 				c <- result
 			}()
 
 			return c
 		}
-		determineArgFieldType := func(o *graphql.Object) chan Result {
+		determineRequiredInputs := func(o *graphql.Object, loc Location) chan Result {
 			c := make(chan Result)
 
-			// obj := *o
+			obj := *o
 			go func() {
 				defer close(c)
+
+				var rootObj *graphql.Object
+				if loc == locArg {
+					obj.Args = []*graphql.Object{}
+					obj.Fields = []*graphql.Object{}
+					rootObj = getRootObj(&obj)
+				} else {
+					caller := *getCallerObj(&obj)
+					caller.Fields = []*graphql.Object{
+						{
+							Name: "graphqshell_field",
+						},
+					}
+
+					rootObj = getRootObj(&caller)
+
+					// obj.Caller = &caller
+					// obj.SetValue(map[string]interface{}{})
+				}
+
+				resp, err := client.PostJSON(rootObj)
+				if err != nil {
+					fmt.Printf("[!] Error posting: %v\n", err)
+				}
+
+				for _, e := range resp.Result.Errors {
+					matches := requiredArgRe(obj.Name).FindStringSubmatch(e.Message)
+					if len(matches) > 0 {
+						c <- &RequiredResult{
+							Text:     matches[1],
+							Type:     matches[2],
+							Location: locArg,
+							obj:      o,
+						}
+						continue
+					}
+
+					matches = requiredArgFieldRe(obj.Type.RootName()).FindStringSubmatch(e.Message)
+					if len(matches) == 0 {
+						continue
+					}
+
+					c <- &RequiredResult{
+						Text:     matches[1],
+						Type:     matches[2],
+						Location: locArgField,
+						obj:      o,
+					}
+				}
 			}()
 
 			return c
@@ -719,12 +817,17 @@ var schemaFuzzCmd = &cobra.Command{
 			case argJob:
 				results = fuzzArgs(job.Object)
 			case argTypeJob:
-				results = determineArgType(job.Object)
+				results = determineArgType(job.Object, locArg)
 			case argFieldJob:
 				resolveStack.Push(job.Object.Type.RootName())
 				results = fuzzFields(job.Object, locArgField)
 			case argFieldTypeJob:
-				results = determineArgFieldType(job.Object)
+				results = determineArgType(job.Object, locArgField)
+			case requiredArgsJob:
+				results = determineRequiredInputs(job.Object, locArg)
+			case requiredArgFieldsJob:
+				results = determineRequiredInputs(job.Object, locArgField)
+			case enumJob:
 			default:
 				panic(fmt.Sprintf("Unknown job type: %s", job.Type))
 			}
@@ -825,6 +928,45 @@ var schemaFuzzCmd = &cobra.Command{
 							Object:   obj,
 						})
 					}
+				case *RequiredResult:
+					fuzzed := &graphql.Object{
+						Name:   r.Text,
+						Type:   *graphql.TypeRefFromString(r.Type, ""),
+						Parent: obj,
+					}
+
+					fuzzed.SetValue(map[string]interface{}{})
+					if r.Location == locArg {
+						fuzzed.Parent = nil
+						fuzzed.Caller = obj
+
+						obj.AddArg(fuzzed)
+
+						push(&Job{
+							Priority: 110,
+							Type:     requiredArgFieldsJob,
+							Object:   fuzzed,
+						})
+						push(&Job{
+							Priority: 50,
+							Type:     argTypeJob,
+							Object:   fuzzed,
+						})
+					} else {
+						obj.AddField(fuzzed)
+						obj.SetValue(nil)
+
+						push(&Job{
+							Priority: 110,
+							Type:     requiredArgFieldsJob,
+							Object:   fuzzed,
+						})
+						push(&Job{
+							Priority: 50,
+							Type:     argFieldTypeJob,
+							Object:   fuzzed,
+						})
+					}
 				}
 			}
 
@@ -843,6 +985,11 @@ var schemaFuzzCmd = &cobra.Command{
 					push(&Job{
 						Priority: 55,
 						Type:     argJob,
+						Object:   job.Object,
+					})
+					push(&Job{
+						Priority: 120,
+						Type:     requiredArgsJob,
 						Object:   job.Object,
 					})
 				}
