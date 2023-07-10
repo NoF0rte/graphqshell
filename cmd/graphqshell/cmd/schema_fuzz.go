@@ -10,6 +10,7 @@ import (
 	"github.com/NoF0rte/graphqshell/pkg/graphql"
 	"github.com/analog-substance/fileutil"
 	"github.com/emirpasic/gods/queues/priorityqueue"
+	"github.com/emirpasic/gods/sets/hashset"
 	"github.com/emirpasic/gods/stacks/arraystack"
 	"github.com/emirpasic/gods/utils"
 	"github.com/spf13/cobra"
@@ -50,7 +51,11 @@ var (
 	fuzzMutex    *sync.Mutex                    = &sync.Mutex{}
 	deferResolve map[string][]func(interface{}) = make(map[string][]func(interface{}))
 	resolveStack *arraystack.Stack              = arraystack.New()
-	ignoreFields []string                       = []string{
+
+	foundWordsMutex *sync.Mutex  = &sync.Mutex{}
+	foundWordsSet   *hashset.Set = hashset.New()
+
+	ignoreFields []string = []string{
 		"__type",
 		"__schema",
 	}
@@ -65,6 +70,11 @@ var (
 
 	rootQuery    *graphql.Object
 	rootMutation *graphql.Object
+)
+
+const (
+	batchFieldSize int = 64
+	batchArgSize   int = 25
 )
 
 type Result interface {
@@ -152,6 +162,12 @@ func pop() (*Job, bool) {
 	return v.(*Job), ok
 }
 
+func addWord(word string) {
+	foundWordsMutex.Lock()
+	foundWordsSet.Add(word)
+	foundWordsMutex.Unlock()
+}
+
 func getRootObj(o *graphql.Object) *graphql.Object {
 	if (o.Parent == rootQuery || o.Parent == rootMutation || o.Parent == nil) && o.Caller == nil {
 		return o
@@ -179,10 +195,31 @@ func getRootObj(o *graphql.Object) *graphql.Object {
 
 func getCallerObj(o *graphql.Object) *graphql.Object {
 	if o.Caller != nil {
-		return o.Caller
+		caller := *o.Caller
+
+		args := []*graphql.Object{o}
+		for _, a := range caller.Args {
+			if a.Name != o.Name && a.Type.IsRequired() {
+				args = append(args, a)
+			}
+		}
+		caller.Args = args
+		caller.SetValue(nil)
+		return &caller
 	}
 
-	return getCallerObj(o.Parent)
+	parent := *o.Parent
+
+	fields := []*graphql.Object{o}
+	for _, f := range parent.Fields {
+		if f.Name != o.Name && f.Type.IsRequired() {
+			fields = append(fields, f)
+		}
+	}
+	parent.Fields = fields
+	parent.SetValue(nil)
+
+	return getCallerObj(&parent)
 }
 
 func getMinFields(o *graphql.Object) *graphql.Object {
@@ -234,6 +271,24 @@ func isKnownScalar(t string) bool {
 	return false
 }
 
+func objPath(o *graphql.Object, input string) string {
+	if input == "" {
+		input = o.Name
+	} else {
+		input = fmt.Sprintf("%s.%s", o.Name, input)
+	}
+
+	if o.Parent == nil && o.Caller == nil {
+		return input
+	}
+
+	if o.Parent == nil {
+		return objPath(o.Caller, input)
+	}
+
+	return objPath(o.Parent, input)
+}
+
 // schemaFuzzCmd represents the fuzz command
 var schemaFuzzCmd = &cobra.Command{
 	Use:   "fuzz",
@@ -270,6 +325,8 @@ var schemaFuzzCmd = &cobra.Command{
 
 		client := graphql.NewClient(u, opts...)
 
+		graphql.ValueCaching = false
+
 		lines, err := fileutil.ReadLines(wordlist)
 		if err != nil {
 			fmt.Printf("[!] Error: %v\n", err)
@@ -277,11 +334,14 @@ var schemaFuzzCmd = &cobra.Command{
 		}
 
 		// Add words found
-		getWords := func() chan string {
+		getWords := func(foundWords []interface{}) chan string {
 			c := make(chan string)
 			go func() {
 				for _, word := range lines {
 					c <- word
+				}
+				for _, word := range foundWords {
+					c <- word.(string)
 				}
 				close(c)
 			}()
@@ -304,7 +364,7 @@ var schemaFuzzCmd = &cobra.Command{
 			return regexp.MustCompile(fmt.Sprintf(`Field "%s" argument "(%s)" of type "([^"]+)" is required`, regexp.QuoteMeta(name), graphqlNameRe))
 		}
 		requiredArgFieldRe := func(t string) *regexp.Regexp {
-			return regexp.MustCompile(fmt.Sprintf(`Field %s\.(%s) of required type (.*?) was not provided`, regexp.QuoteMeta(t), graphqlNameRe))
+			return regexp.MustCompile(fmt.Sprintf(`Field "?%s\.(%s)"? of required type "?(.*?)"? was not provided`, regexp.QuoteMeta(t), graphqlNameRe))
 		}
 		fieldNotDefinedRe := func(name string) *regexp.Regexp {
 			return regexp.MustCompile(fmt.Sprintf(`Field "%s" is not defined by %s`, regexp.QuoteMeta(name), graphqlNameRe))
@@ -316,7 +376,7 @@ var schemaFuzzCmd = &cobra.Command{
 			return regexp.MustCompile(fmt.Sprintf(`Variable "\$%s" of type "%s" used in position expecting type "([^"]+)"`, regexp.QuoteMeta(variable.Name), regexp.QuoteMeta(variable.Type.String())))
 		}
 
-		didYouMeanRe := regexp.MustCompile(`Did you mean (.*)\?`)
+		didYouMeanRe := regexp.MustCompile(`Did you mean (.*)\?$`)
 		// graphqlRe := regexp.MustCompile(fmt.Sprintf(`"(%s)(?: .*)?"`, graphqlNameRe))
 		graphqlRe := regexp.MustCompile(graphqlNameRe)
 		orRe := regexp.MustCompile(" or ")
@@ -325,11 +385,11 @@ var schemaFuzzCmd = &cobra.Command{
 			Name:     "Query",
 			Template: "query {{.Body}}",
 		}
-		push(&Job{
-			Priority: 100,
-			Type:     fieldTypeJob,
-			Object:   rootQuery,
-		})
+		// push(&Job{
+		// 	Priority: 100,
+		// 	Type:     fieldTypeJob,
+		// 	Object:   rootQuery,
+		// })
 
 		rootMutation = &graphql.Object{
 			Name:     "Mutation",
@@ -346,21 +406,50 @@ var schemaFuzzCmd = &cobra.Command{
 
 			obj := *o
 
-			fuzzField := &graphql.Object{}
-			obj.Fields = []*graphql.Object{fuzzField}
+			// fuzzField := &graphql.Object{}
+			// obj.Fields = []*graphql.Object{fuzzField}
 
 			re := queryFieldRe
-			if loc == locArgField {
-				fuzzField.Type = graphql.TypeRef{
-					Kind: graphql.KindEnum,
+			createField := func(word string) *graphql.Object {
+				return &graphql.Object{
+					Name: word,
 				}
-				fuzzField.SetValue("graphqshell_arg_field")
+			}
+
+			if loc == locArgField {
+				obj.SetValue(nil)
+
+				createField = func(word string) *graphql.Object {
+					f := &graphql.Object{
+						Name: word,
+						Type: graphql.TypeRef{
+							Kind: graphql.KindEnum,
+						},
+					}
+					f.SetValue("graphqshell_arg_field")
+					return f
+				}
 
 				re = fieldNotDefinedRe
 			}
 
-			for word := range words {
-				fuzzField.Name = word
+			for {
+				count := 0
+				var fields []*graphql.Object
+				for word := range words {
+					if count == batchFieldSize {
+						break
+					}
+
+					fields = append(fields, createField(word))
+					count++
+				}
+
+				if count == 0 {
+					break
+				}
+
+				obj.Fields = fields
 
 				resp, err := client.PostJSON(getRootObj(&obj))
 				if err != nil {
@@ -368,44 +457,67 @@ var schemaFuzzCmd = &cobra.Command{
 					continue
 				}
 
-				handled := false
-				found := false
-				for _, e := range resp.Result.Errors {
-					if !re(word).MatchString(e.Message) {
-						continue
-					}
+				if resp.RawResponse.StatusCode >= 500 {
+					fmt.Printf("[!] Server error: %s\n", resp.RawResponse.Status)
+					continue
+				}
 
-					handled = true
+				for _, f := range fields {
+					word := f.Name
 
-					didYouMeanMatches := didYouMeanRe.FindStringSubmatch(e.Message)
-					if len(didYouMeanMatches) == 0 {
-						continue
-					}
-
-					suggestions := didYouMeanMatches[1]
-					suggestions = orRe.ReplaceAllString(suggestions, " ")
-					matches := graphqlRe.FindAllString(suggestions, -1)
-					for _, field := range matches {
-						found = true
-
-						if shouldIgnoreField(field) {
+					handled := false
+					found := false
+					for _, e := range resp.Result.Errors {
+						if strings.Contains(e.Message, "inline fragment") {
+							fmt.Printf("[!] Found inline fragment. Currently not implemented\n")
 							continue
 						}
 
+						if !re(word).MatchString(e.Message) {
+							continue
+						}
+
+						handled = true
+
+						didYouMeanMatches := didYouMeanRe.FindStringSubmatch(e.Message)
+						if len(didYouMeanMatches) == 0 {
+							continue
+						}
+
+						suggestions := didYouMeanMatches[1]
+						suggestions = orRe.ReplaceAllString(suggestions, " ")
+						matches := graphqlRe.FindAllString(suggestions, -1)
+						if len(matches) == 0 {
+							continue
+						}
+
+						for _, field := range matches {
+							found = true
+
+							if shouldIgnoreField(field) {
+								continue
+							}
+
+							results <- &FuzzResult{
+								Text:     field,
+								Location: loc,
+								obj:      o,
+							}
+
+							addWord(field)
+							addWord(field[:len(field)-1])
+						}
+
+						break
+					}
+
+					// Can happen when the word is an exact match
+					if !handled && !found {
 						results <- &FuzzResult{
-							Text:     field,
+							Text:     word,
 							Location: loc,
 							obj:      o,
 						}
-					}
-				}
-
-				// Can happen when the word is an exact match
-				if !handled && !found {
-					results <- &FuzzResult{
-						Text:     word,
-						Location: loc,
-						obj:      o,
 					}
 				}
 			}
@@ -415,7 +527,7 @@ var schemaFuzzCmd = &cobra.Command{
 
 			go func() {
 				wg := &sync.WaitGroup{}
-				words := getWords()
+				words := getWords(foundWordsSet.Values())
 				for i := 0; i < threads; i++ {
 					wg.Add(1)
 					go fieldWorker(o, loc, words, c, wg)
@@ -427,6 +539,80 @@ var schemaFuzzCmd = &cobra.Command{
 
 			return c
 		}
+
+		// enumWorker := func(o *graphql.Object, loc Location, words chan string, results chan Result, wg *sync.WaitGroup) {
+		// 	defer wg.Done()
+
+		// 	obj := *o
+
+		// 	for word := range words {
+		// 		fuzzField.Name = word
+
+		// 		resp, err := client.PostJSON(getRootObj(&obj))
+		// 		if err != nil {
+		// 			fmt.Printf("[!] Error posting: %v\n", err)
+		// 			continue
+		// 		}
+
+		// 		handled := false
+		// 		found := false
+		// 		for _, e := range resp.Result.Errors {
+		// 			if !re(word).MatchString(e.Message) {
+		// 				continue
+		// 			}
+
+		// 			handled = true
+
+		// 			didYouMeanMatches := didYouMeanRe.FindStringSubmatch(e.Message)
+		// 			if len(didYouMeanMatches) == 0 {
+		// 				continue
+		// 			}
+
+		// 			suggestions := didYouMeanMatches[1]
+		// 			suggestions = orRe.ReplaceAllString(suggestions, " ")
+		// 			matches := graphqlRe.FindAllString(suggestions, -1)
+		// 			for _, field := range matches {
+		// 				found = true
+
+		// 				if shouldIgnoreField(field) {
+		// 					continue
+		// 				}
+
+		// 				results <- &FuzzResult{
+		// 					Text:     field,
+		// 					Location: loc,
+		// 					obj:      o,
+		// 				}
+		// 			}
+		// 		}
+
+		// 		// Can happen when the word is an exact match
+		// 		if !handled && !found {
+		// 			results <- &FuzzResult{
+		// 				Text:     word,
+		// 				Location: loc,
+		// 				obj:      o,
+		// 			}
+		// 		}
+		// 	}
+		// }
+		// fuzzEnumValues := func(o *graphql.Object, loc Location) chan Result {
+		// 	c := make(chan Result)
+
+		// 	go func() {
+		// 		wg := &sync.WaitGroup{}
+		// 		words := getWords()
+		// 		for i := 0; i < threads; i++ {
+		// 			wg.Add(1)
+		// 			go enumWorker(o, loc, words, c, wg)
+		// 		}
+
+		// 		wg.Wait()
+		// 		close(c)
+		// 	}()
+
+		// 	return c
+		// }
 
 		argsWorker := func(o *graphql.Object, words chan string, results chan Result, wg *sync.WaitGroup) {
 			defer wg.Done()
@@ -440,8 +626,25 @@ var schemaFuzzCmd = &cobra.Command{
 			fuzzArg := &graphql.Object{}
 			obj.Args = []*graphql.Object{fuzzArg}
 
-			for word := range words {
-				fuzzArg.Name = word
+			for {
+				count := 0
+				var args []*graphql.Object
+				for word := range words {
+					if count == batchFieldSize {
+						break
+					}
+
+					args = append(args, &graphql.Object{
+						Name: word,
+					})
+					count++
+				}
+
+				if count == 0 {
+					break
+				}
+
+				obj.Args = args
 
 				resp, err := client.PostJSON(getRootObj(&obj))
 				if err != nil {
@@ -449,43 +652,50 @@ var schemaFuzzCmd = &cobra.Command{
 					continue
 				}
 
-				handled := false
-				found := false
-				unknownArgRe := regexp.MustCompile(fmt.Sprintf(`Unknown argument "%s"`, word))
-				for _, e := range resp.Result.Errors {
-					if !unknownArgRe.MatchString(e.Message) {
-						continue
+				for _, a := range args {
+					word := a.Name
+
+					handled := false
+					found := false
+					unknownArgRe := regexp.MustCompile(fmt.Sprintf(`Unknown argument "%s"`, word))
+					for _, e := range resp.Result.Errors {
+						if !unknownArgRe.MatchString(e.Message) {
+							continue
+						}
+
+						handled = true
+						didYouMeanMatches := didYouMeanRe.FindStringSubmatch(e.Message)
+						if len(didYouMeanMatches) == 0 {
+							continue
+						}
+
+						suggestions := didYouMeanMatches[1]
+						suggestions = orRe.ReplaceAllString(suggestions, " ")
+						if len(didYouMeanMatches) == 0 {
+							continue
+						}
+
+						matches := graphqlRe.FindAllString(suggestions, -1)
+						for _, arg := range matches {
+							found = true
+							results <- &FuzzResult{
+								Text:     arg,
+								Location: locArg,
+								obj:      o,
+							}
+
+							addWord(arg)
+							addWord(arg[:len(arg)-1])
+						}
 					}
 
-					handled = true
-					didYouMeanMatches := didYouMeanRe.FindStringSubmatch(e.Message)
-					if len(didYouMeanMatches) == 0 {
-						continue
-					}
-
-					suggestions := didYouMeanMatches[1]
-					suggestions = orRe.ReplaceAllString(suggestions, " ")
-					if len(didYouMeanMatches) == 0 {
-						continue
-					}
-
-					matches := graphqlRe.FindAllString(suggestions, -1)
-					for _, arg := range matches {
-						found = true
+					// Can happen when the word is an exact match
+					if !handled && !found {
 						results <- &FuzzResult{
-							Text:     arg,
+							Text:     word,
 							Location: locArg,
 							obj:      o,
 						}
-					}
-				}
-
-				// Can happen when the word is an exact match
-				if !handled && !found {
-					results <- &FuzzResult{
-						Text:     word,
-						Location: locArg,
-						obj:      o,
 					}
 				}
 			}
@@ -500,7 +710,7 @@ var schemaFuzzCmd = &cobra.Command{
 				})
 
 				wg := &sync.WaitGroup{}
-				words := getWords()
+				words := getWords(foundWordsSet.Values())
 				for i := 0; i < threads; i++ {
 					wg.Add(1)
 					go argsWorker(o, words, c, wg)
@@ -605,17 +815,17 @@ var schemaFuzzCmd = &cobra.Command{
 					caller := getCallerObj(&obj)
 					caller = getMinFields(caller)
 
-					// Need to correctly pass in the lowest obj
 					rootObj = getRootObj(caller)
 				} else {
 					caller := getMinFields(obj.Caller)
 					if caller == nil {
-						push(&Job{
-							Priority: 20,
-							Type:     argTypeJob,
-							Object:   o,
-						})
 						return
+						// push(&Job{
+						// 	Priority: 20,
+						// 	Type:     argTypeJob,
+						// 	Object:   o,
+						// })
+						// return
 					}
 
 					obj.Caller = caller
@@ -628,25 +838,13 @@ var schemaFuzzCmd = &cobra.Command{
 				// If the type is partially filled out, then the arg is probably a required arg
 				if obj.Type.RootName() != "" {
 					result.Type = obj.Type.String()
-
-					// // If the object has fields, we know it is an object
-					// if len(obj.Fields) > 0 {
-					// 	c <- result
-					// 	return
-					// }
 				} else {
 					variable := &graphql.Variable{
 						Name:  obj.Name,
 						Value: name,
-						Type: graphql.TypeRef{
-							Name: name,
-						},
+						Type:  *graphql.TypeRefFromString("[Boolean!]!", graphql.KindScalar),
 					}
 					obj.SetValue(variable)
-
-					// obj.Fields = append(obj.Fields, &graphql.Object{
-					// 	Name: name,
-					// })
 
 					resp, err := client.PostJSON(rootObj, variable)
 					if err != nil {
@@ -663,7 +861,7 @@ var schemaFuzzCmd = &cobra.Command{
 
 						matches = expectedTypeRe(name).FindStringSubmatch(e.Message)
 						if len(matches) == 0 {
-							fmt.Println("Type not found")
+							fmt.Printf("Type not found: %s\n", e.Message)
 							continue
 						}
 
@@ -690,13 +888,15 @@ var schemaFuzzCmd = &cobra.Command{
 						return
 					}
 
-					enumRe := regexp.MustCompile(` [Ee]nums? `)
+					// Keep track of the types that have been found to be scalar or enum
+					// so we don't try to fuzz for fields
+					enumRe := regexp.MustCompile(`\b[Ee]nums?\b`)
 					for _, e := range resp.Result.Errors {
 						if enumRe.MatchString(e.Message) {
 							result.Kind = graphql.KindEnum
 							break
 						}
-						if strings.Contains(e.Message, "must be a string") {
+						if strings.Contains(e.Message, "must be a string") || strings.Contains(e.Message, "non-string") || strings.Contains(e.Message, "non-integer") {
 							result.Kind = graphql.KindScalar
 							break
 						}
@@ -709,32 +909,9 @@ var schemaFuzzCmd = &cobra.Command{
 					// If no values found or no indication that it is an enum, maybe assume it is a scalar?
 				}
 
-				// if result.Type == "" {
-				// 	obj.Fields = []*graphql.Object{}
-
-				// 	rootObj := getRootObj(&obj)
-				// 	resp, err = client.PostJSON(rootObj)
-				// 	if err != nil {
-				// 		fmt.Printf("[!] Error posting: %v\n", err)
-				// 		return
-				// 	}
-
-				// 	for _, e := range resp.Result.Errors {
-				// 		matches := fieldOfTypeRe(obj.Name).FindAllStringSubmatch(e.Message, -1)
-				// 		if len(matches) == 0 {
-				// 			continue
-				// 		}
-
-				// 		result.Type = matches[0][1]
-				// 		break
-				// 	}
-
-				// 	if result.Type == "" {
-				// 		return
-				// 	}
-				// }
-
-				c <- result
+				if result.Type != "" {
+					c <- result
+				}
 			}()
 
 			return c
@@ -805,7 +982,7 @@ var schemaFuzzCmd = &cobra.Command{
 				break
 			}
 
-			fmt.Printf("[%s] %s\n", job.Type, job.Object.Name)
+			fmt.Printf("[%s] %s\n", job.Type, objPath(job.Object, ""))
 
 			var results chan Result
 			switch job.Type {
@@ -828,6 +1005,8 @@ var schemaFuzzCmd = &cobra.Command{
 			case requiredArgFieldsJob:
 				results = determineRequiredInputs(job.Object, locArgField)
 			case enumJob:
+				// resolveStack.Push(job.Object.Type.RootName())
+				// results = fuzzFields()
 			default:
 				panic(fmt.Sprintf("Unknown job type: %s", job.Type))
 			}
@@ -847,7 +1026,7 @@ var schemaFuzzCmd = &cobra.Command{
 							fuzzed.Parent = nil
 							fuzzed.Caller = obj
 
-							fmt.Printf("[%s] Found arg: %s.%s(%s)\n", job.Type, obj.Parent.Name, obj.Name, fuzzed.Name)
+							fmt.Printf("[%s] Found: %s(%s)\n", job.Type, objPath(obj, ""), fuzzed.Name)
 
 							push(&Job{
 								Priority: 50,
@@ -856,7 +1035,7 @@ var schemaFuzzCmd = &cobra.Command{
 							})
 						}
 					} else if obj.AddField(fuzzed) {
-						fmt.Printf("[%s] Found %s: %s.%s\n", job.Type, r.Location, obj.Name, fuzzed.Name)
+						fmt.Printf("[%s] Found: %s.%s\n", job.Type, objPath(obj, ""), fuzzed.Name)
 
 						if r.Location == locField {
 							push(&Job{
@@ -881,17 +1060,19 @@ var schemaFuzzCmd = &cobra.Command{
 					if obj.Name == rootQuery.Name || obj.Name == rootMutation.Name {
 						obj.Name = r.Type
 					} else {
-						parent := obj.Parent
-						if parent == nil {
-							parent = obj.Caller
-						}
-
-						fmt.Printf("[%s] Found %s type: %s.%s %s\n", job.Type, r.Location, parent.Name, obj.Name, r.Type)
+						fmt.Printf("[%s] Found: %s %s\n", job.Type, objPath(obj, ""), r.Type)
 
 						ref := graphql.TypeRefFromString(r.Type, r.Kind)
 						obj.Type = *ref
 
 						rootName := ref.RootName()
+						if rootName != "" {
+							addWord(rootName)
+							if len(rootName) > 1 {
+								addWord(rootName[:len(rootName)-1])
+							}
+						}
+
 						if isResolving(rootName) {
 							deferResolve[rootName] = append(deferResolve[rootName], func(i interface{}) {
 								o := i.(*graphql.Object)
@@ -910,6 +1091,14 @@ var schemaFuzzCmd = &cobra.Command{
 						}
 
 						if r.Kind == graphql.KindScalar {
+							continue
+						}
+						if r.Kind == graphql.KindEnum {
+							push(&Job{
+								Priority: 20,
+								Type:     enumJob,
+								Object:   obj,
+							})
 							continue
 						}
 					}
@@ -934,6 +1123,10 @@ var schemaFuzzCmd = &cobra.Command{
 						Type:   *graphql.TypeRefFromString(r.Type, ""),
 						Parent: obj,
 					}
+
+					rootName := fuzzed.Type.RootName()
+					addWord(rootName)
+					addWord(rootName[:len(rootName)-1])
 
 					fuzzed.SetValue(map[string]interface{}{})
 					if r.Location == locArg {
@@ -970,7 +1163,7 @@ var schemaFuzzCmd = &cobra.Command{
 				}
 			}
 
-			if job.Type == fieldJob || job.Type == argFieldJob {
+			if job.Type == fieldJob || job.Type == argFieldJob || job.Type == enumJob {
 				resolveStack.Pop()
 
 				rootName := job.Object.Type.RootName()
@@ -999,14 +1192,12 @@ var schemaFuzzCmd = &cobra.Command{
 				if job.Object.Name == rootQuery.Name {
 					for _, f := range rootQuery.Fields {
 						f.Template = graphql.QueryTemplate
-						// f.Parent = nil
 					}
 				}
 
 				if job.Object.Name == rootMutation.Name {
 					for _, f := range rootMutation.Fields {
 						f.Template = graphql.MutationTemplate
-						// f.Parent = nil
 					}
 				}
 			}
