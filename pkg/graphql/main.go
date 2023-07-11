@@ -76,7 +76,9 @@ var (
 	resolveStack *arraystack.Stack              = arraystack.New()
 	argMutex     *sync.Mutex                    = &sync.Mutex{}
 
-	Debug bool = false
+	Debug         bool = false
+	ObjectCaching bool = true
+	ValueCaching  bool = true
 )
 
 func clearCache() {
@@ -94,7 +96,7 @@ func indent(v string) string {
 }
 
 func getOrResolveObj(ref *TypeRef) *Object {
-	if ref.IsScalar() {
+	if ref.IsScalar() || !ObjectCaching {
 		return ref.Resolve()
 	}
 
@@ -109,7 +111,7 @@ func getOrResolveObj(ref *TypeRef) *Object {
 }
 
 func getOrGenValue(obj *Object) interface{} {
-	if obj.Type.IsScalar() {
+	if obj.Type.IsScalar() || !ValueCaching {
 		return obj.GenValue()
 	}
 

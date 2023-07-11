@@ -7,10 +7,10 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/NoF0rte/graphqshell/internal/ds"
 	"github.com/NoF0rte/graphqshell/pkg/graphql"
 	"github.com/analog-substance/fileutil"
 	"github.com/emirpasic/gods/queues/priorityqueue"
-	"github.com/emirpasic/gods/sets/hashset"
 	"github.com/emirpasic/gods/stacks/arraystack"
 	"github.com/emirpasic/gods/utils"
 	"github.com/spf13/cobra"
@@ -43,6 +43,7 @@ type Job struct {
 	Priority int
 	Type     jobType
 	Object   *graphql.Object
+	Previous *Job
 }
 
 var (
@@ -52,21 +53,19 @@ var (
 	deferResolve map[string][]func(interface{}) = make(map[string][]func(interface{}))
 	resolveStack *arraystack.Stack              = arraystack.New()
 
-	foundWordsMutex *sync.Mutex  = &sync.Mutex{}
-	foundWordsSet   *hashset.Set = hashset.New()
-
 	ignoreFields []string = []string{
 		"__type",
 		"__schema",
 	}
 
-	knownScalarTypes []string = []string{
+	foundWordsSet *ds.ThreadSafeSet = ds.NewThreadSafeSet()
+	knownScalars  *ds.ThreadSafeSet = ds.NewThreadSafeSet(
 		"Float",
 		"String",
 		"Int",
 		"Boolean",
 		"ID",
-	}
+	)
 
 	rootQuery    *graphql.Object
 	rootMutation *graphql.Object
@@ -160,12 +159,6 @@ func pop() (*Job, bool) {
 	}
 
 	return v.(*Job), ok
-}
-
-func addWord(word string) {
-	foundWordsMutex.Lock()
-	foundWordsSet.Add(word)
-	foundWordsMutex.Unlock()
 }
 
 func getRootObj(o *graphql.Object) *graphql.Object {
@@ -262,13 +255,7 @@ func assignNewParent(items []*graphql.Object, parent *graphql.Object) []*graphql
 func isKnownScalar(t string) bool {
 	typeRef := graphql.TypeRefFromString(t, "")
 	rootType := typeRef.RootName()
-	for _, known := range knownScalarTypes {
-		if rootType == known {
-			return true
-		}
-	}
-
-	return false
+	return knownScalars.Contains(rootType)
 }
 
 func objPath(o *graphql.Object, input string) string {
@@ -504,8 +491,8 @@ var schemaFuzzCmd = &cobra.Command{
 								obj:      o,
 							}
 
-							addWord(field)
-							addWord(field[:len(field)-1])
+							foundWordsSet.Add(field)
+							foundWordsSet.Add(field[:len(field)-1])
 						}
 
 						break
@@ -684,8 +671,8 @@ var schemaFuzzCmd = &cobra.Command{
 								obj:      o,
 							}
 
-							addWord(arg)
-							addWord(arg[:len(arg)-1])
+							foundWordsSet.Add(arg)
+							foundWordsSet.Add(arg[:len(arg)-1])
 						}
 					}
 
@@ -888,8 +875,6 @@ var schemaFuzzCmd = &cobra.Command{
 						return
 					}
 
-					// Keep track of the types that have been found to be scalar or enum
-					// so we don't try to fuzz for fields
 					enumRe := regexp.MustCompile(`\b[Ee]nums?\b`)
 					for _, e := range resp.Result.Errors {
 						if enumRe.MatchString(e.Message) {
@@ -901,12 +886,6 @@ var schemaFuzzCmd = &cobra.Command{
 							break
 						}
 					}
-
-					// Determine if it is a scalar or enum
-					// If neither, assume object
-					// Fuzz fields on the "object"
-					// If no fields are found try fuzzing enum values
-					// If no values found or no indication that it is an enum, maybe assume it is a scalar?
 				}
 
 				if result.Type != "" {
@@ -984,6 +963,7 @@ var schemaFuzzCmd = &cobra.Command{
 
 			fmt.Printf("[%s] %s\n", job.Type, objPath(job.Object, ""))
 
+			hadResults := false
 			var results chan Result
 			switch job.Type {
 			case fieldJob:
@@ -1012,6 +992,8 @@ var schemaFuzzCmd = &cobra.Command{
 			}
 
 			for result := range results {
+				hadResults = true
+
 				obj := result.Object()
 
 				switch r := result.(type) {
@@ -1067,9 +1049,9 @@ var schemaFuzzCmd = &cobra.Command{
 
 						rootName := ref.RootName()
 						if rootName != "" {
-							addWord(rootName)
+							foundWordsSet.Add(rootName)
 							if len(rootName) > 1 {
-								addWord(rootName[:len(rootName)-1])
+								foundWordsSet.Add(rootName[:len(rootName)-1])
 							}
 						}
 
@@ -1091,9 +1073,11 @@ var schemaFuzzCmd = &cobra.Command{
 						}
 
 						if r.Kind == graphql.KindScalar {
+							knownScalars.Add(ref.RootName())
 							continue
 						}
 						if r.Kind == graphql.KindEnum {
+							knownScalars.Add(ref.RootName())
 							push(&Job{
 								Priority: 20,
 								Type:     enumJob,
@@ -1125,8 +1109,8 @@ var schemaFuzzCmd = &cobra.Command{
 					}
 
 					rootName := fuzzed.Type.RootName()
-					addWord(rootName)
-					addWord(rootName[:len(rootName)-1])
+					foundWordsSet.Add(rootName)
+					foundWordsSet.Add(rootName[:len(rootName)-1])
 
 					fuzzed.SetValue(map[string]interface{}{})
 					if r.Location == locArg {
@@ -1185,6 +1169,25 @@ var schemaFuzzCmd = &cobra.Command{
 						Type:     requiredArgsJob,
 						Object:   job.Object,
 					})
+				}
+
+				// If there were no fields found, it could be the type isn't an object
+				// Fuzz for enum values
+				if job.Type == argFieldJob && !hadResults {
+					push(&Job{
+						Priority: job.Priority,
+						Type:     enumJob,
+						Object:   job.Object,
+						Previous: job,
+					})
+				}
+
+				// If no results on an enum fuzz and the previous job was a field fuzz
+				// that means we couldn't find any fields or enum values. Maybe safe to say
+				// that the object is a Scalar
+				if job.Type == enumJob && !hadResults && job.Previous != nil && job.Previous.Type == argFieldJob {
+					job.Object.Type = *graphql.TypeRefFromString(job.Object.Type.String(), graphql.KindScalar)
+					knownScalars.Add(job.Object.Type.RootName())
 				}
 
 				objCache[rootName] = job.Object
