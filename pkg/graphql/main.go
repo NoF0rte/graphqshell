@@ -142,6 +142,31 @@ func logf(format string, a ...interface{}) {
 	fmt.Printf(format, a...)
 }
 
+func ScalarGenerator(name string, scalar string) interface{} {
+	randInt := rand.Intn(500)
+	switch {
+	case strings.Contains(scalar, typeBool):
+		return randInt%2 == 0
+	case strings.Contains(scalar, typeInt):
+		return randInt
+	case strings.Contains(scalar, typeString):
+		return fmt.Sprintf("%s string", name)
+	case strings.Contains(scalar, typeID):
+		return uuid.New().String()
+	case strings.Contains(scalar, typeURI):
+		return fmt.Sprintf("https://example.com/%s", name)
+	case strings.Contains(scalar, typeDateTime):
+		return time.Now()
+	case strings.Contains(scalar, typeHTML):
+		return fmt.Sprintf("<html><body><h1>%s</h1></body></html>", name)
+	case strings.Contains(scalar, typeFloat):
+		return rand.Float64() * float64(randInt)
+	default: // Make configurable
+		logf("[!] No default value for scalar %s\n", scalar)
+		return fmt.Sprintf("unknown %s", name)
+	}
+}
+
 type IntrospectionResponse struct {
 	Data struct {
 		Schema Schema `json:"__schema"`
@@ -326,28 +351,7 @@ func (t TypeRef) Resolve() *Object {
 			Name: t.String(),
 			Type: t,
 			valFactory: func(name string) interface{} {
-				randInt := rand.Intn(500)
-				switch {
-				case strings.Contains(t.Name, typeBool):
-					return randInt%2 == 0
-				case strings.Contains(t.Name, typeInt):
-					return randInt
-				case strings.Contains(t.Name, typeString):
-					return fmt.Sprintf("%s string", name)
-				case strings.Contains(t.Name, typeID):
-					return uuid.New().String()
-				case strings.Contains(t.Name, typeURI):
-					return fmt.Sprintf("https://example.com/%s", name)
-				case strings.Contains(t.Name, typeDateTime):
-					return time.Now()
-				case strings.Contains(t.Name, typeHTML):
-					return fmt.Sprintf("<html><body><h1>%s</h1></body></html>", name)
-				case strings.Contains(t.Name, typeFloat):
-					return rand.Float64() * float64(randInt)
-				default: // Make configurable
-					logf("[!] No default value for scalar %s\n", t.Name)
-					return fmt.Sprintf("unknown %s", name)
-				}
+				return ScalarGenerator(name, t.Name)
 			},
 		}
 	case KindObject, KindInputObject, KindInterface, KindUnion:
@@ -490,6 +494,11 @@ func (o *Object) GenValue() interface{} {
 	}
 
 	if o.valFactory == nil {
+		scalarVal := ScalarGenerator(o.Name, o.Type.RootName())
+		if !strings.Contains(scalarVal.(string), "unknown") {
+			return scalarVal
+		}
+
 		objRootType := o.Type.RootName()
 		resolveStack.Push(objRootType)
 

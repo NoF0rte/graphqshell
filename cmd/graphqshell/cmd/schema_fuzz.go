@@ -66,6 +66,7 @@ var (
 		"Boolean",
 		"ID",
 	)
+	knownEnums *ds.ThreadSafeSet = ds.NewThreadSafeSet()
 
 	rootQuery    *graphql.Object
 	rootMutation *graphql.Object
@@ -256,6 +257,12 @@ func isKnownScalar(t string) bool {
 	typeRef := graphql.TypeRefFromString(t, "")
 	rootType := typeRef.RootName()
 	return knownScalars.Contains(rootType)
+}
+
+func isKnownEnum(t string) bool {
+	typeRef := graphql.TypeRefFromString(t, "")
+	rootType := typeRef.RootName()
+	return knownEnums.Contains(rootType)
 }
 
 func objPath(o *graphql.Object, input string) string {
@@ -859,6 +866,8 @@ var schemaFuzzCmd = &cobra.Command{
 
 				if isKnownScalar(result.Type) {
 					result.Kind = graphql.KindScalar
+				} else if isKnownEnum(result.Type) {
+					result.Kind = graphql.KindEnum
 				} else if len(obj.Fields) == 0 {
 					typeRef := graphql.TypeRefFromString(result.Type, "")
 
@@ -875,13 +884,14 @@ var schemaFuzzCmd = &cobra.Command{
 						return
 					}
 
+					nonScalarRe := regexp.MustCompile(`(non-?string)|(non-?integer)|(must be a string)`)
 					enumRe := regexp.MustCompile(`\b[Ee]nums?\b`)
 					for _, e := range resp.Result.Errors {
 						if enumRe.MatchString(e.Message) {
 							result.Kind = graphql.KindEnum
 							break
 						}
-						if strings.Contains(e.Message, "must be a string") || strings.Contains(e.Message, "non-string") || strings.Contains(e.Message, "non-integer") {
+						if nonScalarRe.MatchString(e.Message) {
 							result.Kind = graphql.KindScalar
 							break
 						}
@@ -1072,12 +1082,21 @@ var schemaFuzzCmd = &cobra.Command{
 							continue
 						}
 
+						if (r.Kind == graphql.KindScalar || r.Kind == graphql.KindEnum) &&
+							(r.Location == locArg || r.Location == locArgField) {
+
+							rootName := ref.RootName()
+							if r.Kind == graphql.KindScalar {
+								knownScalars.Add(rootName)
+							} else {
+								knownEnums.Add(rootName)
+							}
+						}
+
 						if r.Kind == graphql.KindScalar {
-							knownScalars.Add(ref.RootName())
 							continue
 						}
 						if r.Kind == graphql.KindEnum {
-							knownScalars.Add(ref.RootName())
 							push(&Job{
 								Priority: 20,
 								Type:     enumJob,
@@ -1133,16 +1152,25 @@ var schemaFuzzCmd = &cobra.Command{
 						obj.AddField(fuzzed)
 						obj.SetValue(nil)
 
-						push(&Job{
-							Priority: 110,
-							Type:     requiredArgFieldsJob,
-							Object:   fuzzed,
-						})
-						push(&Job{
-							Priority: 50,
-							Type:     argFieldTypeJob,
-							Object:   fuzzed,
-						})
+						if isKnownScalar(r.Type) {
+							fuzzed.Type = *graphql.TypeRefFromString(r.Type, graphql.KindScalar)
+
+							fuzzed.SetValue(nil)
+							fuzzed.SetValue(fuzzed.GenValue())
+						} else if isKnownEnum(r.Type) {
+							fuzzed.Type = *graphql.TypeRefFromString(r.Type, graphql.KindScalar)
+						} else {
+							push(&Job{
+								Priority: 110,
+								Type:     requiredArgFieldsJob,
+								Object:   fuzzed,
+							})
+							push(&Job{
+								Priority: 50,
+								Type:     argFieldTypeJob,
+								Object:   fuzzed,
+							})
+						}
 					}
 				}
 			}
