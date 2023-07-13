@@ -477,12 +477,9 @@ var schemaFuzzCmd = &cobra.Command{
 					continue
 				}
 
-			FieldsOuter:
-				for _, f := range fields {
-					word := f.Name
+				process := func(word string, resp *graphql.Response) (handled bool, found bool, shouldContinue bool) {
+					shouldContinue = true
 
-					handled := false
-					found := false
 					for _, e := range resp.Result.Errors {
 						if strings.Contains(e.Message, "inline fragment") {
 							// fmt.Printf("[!] Found inline fragment. Currently not implemented: %s\n", e.Message)
@@ -491,13 +488,15 @@ var schemaFuzzCmd = &cobra.Command{
 
 						// If this matches, then it is an enum and doesn't have fields
 						if enumNotExistsRe(word, "").MatchString(e.Message) {
-							break FieldsOuter
+							shouldContinue = false
+							return
 						}
 
 						// If this matches, then it is an enum and doesn't have fields
 						matches := nonEnumValueRe.FindStringSubmatch(e.Message)
 						if len(matches) > 0 && strings.Contains(matches[1], fmt.Sprintf("%s: graphqshell_arg_field", word)) {
-							break FieldsOuter
+							shouldContinue = false
+							return
 						}
 
 						if !re(word).MatchString(e.Message) {
@@ -537,13 +536,33 @@ var schemaFuzzCmd = &cobra.Command{
 
 						break
 					}
+					return
+				}
+
+				for _, f := range fields {
+					word := f.Name
+
+					handled, found, shouldContinue := process(f.Name, resp)
+					if !shouldContinue {
+						break
+					}
 
 					// Can happen when the word is an exact match
 					if !handled && !found {
-						results <- &FuzzResult{
-							Text:     word,
-							Location: loc,
-							obj:      o,
+						name := word[:len(word)-1]
+						obj.Fields = []*graphql.Object{
+							createField(name),
+						}
+
+						resp, err = client.PostJSON(getRootObj(&obj))
+						if err != nil {
+							fmt.Printf("[!] Error posting: %v\n", err)
+							continue
+						}
+
+						_, _, shouldContinue = process(name, resp)
+						if !shouldContinue {
+							break
 						}
 					}
 				}
@@ -595,18 +614,11 @@ var schemaFuzzCmd = &cobra.Command{
 				rootObj = getRootObj(&obj)
 			}
 
-			for word := range words {
-				obj.SetValue(word)
+			rootName := obj.Type.RootName()
+			handled := false
+			found := false
 
-				resp, err := client.PostJSON(rootObj)
-				if err != nil {
-					fmt.Printf("[!] Error posting: %v\n", err)
-					continue
-				}
-
-				rootName := obj.Type.RootName()
-				handled := false
-				found := false
+			process := func(word string, resp *graphql.Response) {
 				for _, e := range resp.Result.Errors {
 					if !enumNotExistsRe(word, rootName).MatchString(e.Message) {
 						continue
@@ -631,14 +643,30 @@ var schemaFuzzCmd = &cobra.Command{
 						}
 					}
 				}
+			}
+
+			for word := range words {
+				obj.SetValue(word)
+
+				resp, err := client.PostJSON(rootObj)
+				if err != nil {
+					fmt.Printf("[!] Error posting: %v\n", err)
+					continue
+				}
+
+				process(word, resp)
 
 				// Can happen when the word is an exact match
 				if !handled && !found {
-					results <- &FuzzResult{
-						Text:     word,
-						Location: locEnum,
-						obj:      o,
+					value := word[:len(word)-1]
+					obj.SetValue(value)
+
+					resp, err = client.PostJSON(rootObj)
+					if err != nil {
+						fmt.Printf("[!] Error posting: %v\n", err)
+						continue
 					}
+					process(value, resp)
 				}
 			}
 		}
@@ -669,9 +697,6 @@ var schemaFuzzCmd = &cobra.Command{
 				{Name: "graphqlshell_field"},
 			}
 
-			fuzzArg := &graphql.Object{}
-			obj.Args = []*graphql.Object{fuzzArg}
-
 			for {
 				count := 0
 				var args []*graphql.Object
@@ -692,17 +717,7 @@ var schemaFuzzCmd = &cobra.Command{
 
 				obj.Args = args
 
-				resp, err := client.PostJSON(getRootObj(&obj))
-				if err != nil {
-					fmt.Printf("[!] Error posting: %v\n", err)
-					continue
-				}
-
-				for _, a := range args {
-					word := a.Name
-
-					handled := false
-					found := false
+				process := func(word string, resp *graphql.Response) (handled bool, found bool) {
 					unknownArgRe := regexp.MustCompile(fmt.Sprintf(`Unknown argument "%s"`, word))
 					for _, e := range resp.Result.Errors {
 						if !unknownArgRe.MatchString(e.Message) {
@@ -735,13 +750,40 @@ var schemaFuzzCmd = &cobra.Command{
 						}
 					}
 
+					return
+				}
+
+				resp, err := client.PostJSON(getRootObj(&obj))
+				if err != nil {
+					fmt.Printf("[!] Error posting: %v\n", err)
+					continue
+				}
+
+				// TODO: Make more efficient by not doing 2 loops
+				for _, a := range args {
+					word := a.Name
+
+					handled, found := process(a.Name, resp)
+
 					// Can happen when the word is an exact match
+					// Let's do some checks to make sure it isn't a false positive
 					if !handled && !found {
-						results <- &FuzzResult{
-							Text:     word,
-							Location: locArg,
-							obj:      o,
+						name := word[:len(word)-1]
+						obj.Args = []*graphql.Object{
+							{
+								Name: name,
+							},
 						}
+
+						resp, err = client.PostJSON(getRootObj(&obj))
+						if err != nil {
+							fmt.Printf("[!] Error posting: %v\n", err)
+							continue
+						}
+
+						// This should make it so if it was an exact match before
+						// we should get the "did you mean" error
+						process(name, resp)
 					}
 				}
 			}
@@ -860,6 +902,20 @@ var schemaFuzzCmd = &cobra.Command{
 				if loc == locArgField {
 					caller := getCallerObj(&obj)
 					caller = getMinFields(caller)
+					if caller == nil {
+						newPriority := currentJob.Priority - 10
+						if newPriority < 0 {
+							fmt.Printf("[!] Stopping getting arg type for %s\n", objPath(&obj, ""))
+							return
+						}
+
+						push(&Job{
+							Priority: newPriority,
+							Type:     currentJob.Type,
+							Object:   o,
+						})
+						return
+					}
 
 					rootObj = getRootObj(caller)
 				} else {
@@ -873,7 +929,7 @@ var schemaFuzzCmd = &cobra.Command{
 
 						push(&Job{
 							Priority: newPriority,
-							Type:     argTypeJob,
+							Type:     currentJob.Type,
 							Object:   o,
 						})
 						return
@@ -1299,7 +1355,7 @@ var schemaFuzzCmd = &cobra.Command{
 				// Fuzz for enum values
 				if currentJob.Type == argFieldJob && !hadResults {
 					push(&Job{
-						Priority: currentJob.Priority,
+						Priority: 10,
 						Type:     enumJob,
 						Object:   currentJob.Object,
 						Previous: currentJob,
