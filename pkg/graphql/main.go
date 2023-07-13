@@ -339,12 +339,17 @@ func (t TypeRef) Resolve() *Object {
 			},
 		}
 	case KindEnum:
+		var possibleValues []*Object
+		for _, v := range objType.EnumValues {
+			possibleValues = append(possibleValues, &Object{
+				Name: v.Name,
+			})
+		}
+
 		return &Object{
-			Name: t.String(),
-			Type: t,
-			valFactory: func(_ string) interface{} {
-				return objType.EnumValues[rand.Intn(len(objType.EnumValues))].Name
-			},
+			Name:           t.String(),
+			Type:           t,
+			PossibleValues: possibleValues,
 		}
 	case KindScalar:
 		return &Object{
@@ -474,6 +479,10 @@ type Variable struct {
 	Type  TypeRef
 }
 
+type Enum struct {
+	Value string
+}
+
 type Object struct {
 	Name           string
 	Description    string
@@ -505,12 +514,18 @@ func (o *Object) GenValue() interface{} {
 		var generated interface{}
 		if len(o.PossibleValues) != 0 && len(o.Fields) == 0 {
 			possibleVal := o.PossibleValues[rand.Intn(len(o.PossibleValues))]
-			valRootType := possibleVal.Type.RootName()
-			if isResolving(valRootType) {
-				logf("[!] Found cycle when generating value. Setting generated = nil\n")
+			if o.Type.RootKind() == KindEnum {
+				generated = &Enum{
+					Value: possibleVal.Name,
+				}
 			} else {
-				logf("[+] [%s] Creating possible value %s: %s\n", o.Name, possibleVal.Name, possibleVal.Type)
-				generated = getOrGenValue(possibleVal)
+				valRootType := possibleVal.Type.RootName()
+				if isResolving(valRootType) {
+					logf("[!] Found cycle when generating value. Setting generated = nil\n")
+				} else {
+					logf("[+] [%s] Creating possible value %s: %s\n", o.Name, possibleVal.Name, possibleVal.Type)
+					generated = getOrGenValue(possibleVal)
+				}
 			}
 		} else {
 			value := make(map[string]interface{})
@@ -550,6 +565,15 @@ func (o *Object) GenValue() interface{} {
 }
 
 func (o *Object) SetValue(val interface{}) {
+	if o.Type.RootKind() == KindEnum {
+		v, ok := val.(string)
+		if ok {
+			o.valOverride = &Enum{
+				Value: v,
+			}
+			return
+		}
+	}
 	o.valOverride = val
 }
 
@@ -685,6 +709,8 @@ func toArgStr(name string, val interface{}) string {
 		str = fmt.Sprintf("{%s}", strings.Join(vals, ", "))
 	case *Variable:
 		str = fmt.Sprintf("$%s", t.Name)
+	case *Enum:
+		str = t.Value
 	default:
 		bytes, _ := json.Marshal(&t)
 		str = string(bytes)
@@ -725,6 +751,17 @@ func (o *Object) AddArg(arg *Object) bool {
 	}
 
 	o.Args = append(o.Args, arg)
+	return true
+}
+
+func (o *Object) AddPossibleValue(value *Object) bool {
+	for _, v := range o.PossibleValues {
+		if v.Name == value.Name {
+			return false
+		}
+	}
+
+	o.PossibleValues = append(o.PossibleValues, value)
 	return true
 }
 

@@ -369,8 +369,12 @@ var schemaFuzzCmd = &cobra.Command{
 		expectingTypeRe := func(variable *graphql.Variable) *regexp.Regexp {
 			return regexp.MustCompile(fmt.Sprintf(`Variable "\$%s" of type "%s" used in position expecting type "([^"]+)"`, regexp.QuoteMeta(variable.Name), regexp.QuoteMeta(variable.Type.String())))
 		}
+		enumNotExistsRe := func(name string, t string) *regexp.Regexp {
+			return regexp.MustCompile(fmt.Sprintf(`Value "%s" does not exist in "%s" enum`, regexp.QuoteMeta(name), regexp.QuoteMeta(t)))
+		}
 
 		didYouMeanRe := regexp.MustCompile(`Did you mean (.*)\?$`)
+		didYouMeanEnumRe := regexp.MustCompile(`Did you mean the enum value (.*)\?$`)
 		// graphqlRe := regexp.MustCompile(fmt.Sprintf(`"(%s)(?: .*)?"`, graphqlNameRe))
 		graphqlRe := regexp.MustCompile(graphqlNameRe)
 		orRe := regexp.MustCompile(" or ")
@@ -534,79 +538,98 @@ var schemaFuzzCmd = &cobra.Command{
 			return c
 		}
 
-		// enumWorker := func(o *graphql.Object, loc Location, words chan string, results chan Result, wg *sync.WaitGroup) {
-		// 	defer wg.Done()
+		enumWorker := func(o *graphql.Object, loc Location, words chan string, results chan Result, wg *sync.WaitGroup) {
+			defer wg.Done()
 
-		// 	obj := *o
+			obj := *o
 
-		// 	for word := range words {
-		// 		fuzzField.Name = word
+			var rootObj *graphql.Object
+			if loc == locArgField {
+				caller := getCallerObj(&obj)
+				caller = getMinFields(caller)
 
-		// 		resp, err := client.PostJSON(getRootObj(&obj))
-		// 		if err != nil {
-		// 			fmt.Printf("[!] Error posting: %v\n", err)
-		// 			continue
-		// 		}
+				rootObj = getRootObj(caller)
+			} else {
+				caller := getMinFields(obj.Caller)
+				if caller == nil {
+					return
+					// push(&Job{
+					// 	Priority: 20,
+					// 	Type:     argTypeJob,
+					// 	Object:   o,
+					// })
+					// return
+				}
 
-		// 		handled := false
-		// 		found := false
-		// 		for _, e := range resp.Result.Errors {
-		// 			if !re(word).MatchString(e.Message) {
-		// 				continue
-		// 			}
+				obj.Caller = caller
 
-		// 			handled = true
+				rootObj = getRootObj(&obj)
+			}
 
-		// 			didYouMeanMatches := didYouMeanRe.FindStringSubmatch(e.Message)
-		// 			if len(didYouMeanMatches) == 0 {
-		// 				continue
-		// 			}
+			for word := range words {
+				obj.SetValue(word)
 
-		// 			suggestions := didYouMeanMatches[1]
-		// 			suggestions = orRe.ReplaceAllString(suggestions, " ")
-		// 			matches := graphqlRe.FindAllString(suggestions, -1)
-		// 			for _, field := range matches {
-		// 				found = true
+				resp, err := client.PostJSON(rootObj)
+				if err != nil {
+					fmt.Printf("[!] Error posting: %v\n", err)
+					continue
+				}
 
-		// 				if shouldIgnoreField(field) {
-		// 					continue
-		// 				}
+				rootName := obj.Type.RootName()
+				handled := false
+				found := false
+				for _, e := range resp.Result.Errors {
+					if !enumNotExistsRe(word, rootName).MatchString(e.Message) {
+						continue
+					}
 
-		// 				results <- &FuzzResult{
-		// 					Text:     field,
-		// 					Location: loc,
-		// 					obj:      o,
-		// 				}
-		// 			}
-		// 		}
+					handled = true
 
-		// 		// Can happen when the word is an exact match
-		// 		if !handled && !found {
-		// 			results <- &FuzzResult{
-		// 				Text:     word,
-		// 				Location: loc,
-		// 				obj:      o,
-		// 			}
-		// 		}
-		// 	}
-		// }
-		// fuzzEnumValues := func(o *graphql.Object, loc Location) chan Result {
-		// 	c := make(chan Result)
+					didYouMeanMatches := didYouMeanEnumRe.FindStringSubmatch(e.Message)
+					if len(didYouMeanMatches) == 0 {
+						continue
+					}
 
-		// 	go func() {
-		// 		wg := &sync.WaitGroup{}
-		// 		words := getWords()
-		// 		for i := 0; i < threads; i++ {
-		// 			wg.Add(1)
-		// 			go enumWorker(o, loc, words, c, wg)
-		// 		}
+					suggestions := didYouMeanMatches[1]
+					suggestions = orRe.ReplaceAllString(suggestions, " ")
+					matches := graphqlRe.FindAllString(suggestions, -1)
+					for _, match := range matches {
+						found = true
+						results <- &FuzzResult{
+							Text:     match,
+							Location: locEnum,
+							obj:      o,
+						}
+					}
+				}
 
-		// 		wg.Wait()
-		// 		close(c)
-		// 	}()
+				// Can happen when the word is an exact match
+				if !handled && !found {
+					results <- &FuzzResult{
+						Text:     word,
+						Location: locEnum,
+						obj:      o,
+					}
+				}
+			}
+		}
+		fuzzEnumValues := func(o *graphql.Object, loc Location) chan Result {
+			c := make(chan Result)
 
-		// 	return c
-		// }
+			go func() {
+				wg := &sync.WaitGroup{}
+				words := getWords(foundWordsSet.Values())
+				for i := 0; i < threads; i++ {
+					wg.Add(1)
+					go enumWorker(o, loc, words, c, wg)
+				}
+
+				wg.Wait()
+				close(c)
+			}()
+
+			return c
+		}
 
 		argsWorker := func(o *graphql.Object, words chan string, results chan Result, wg *sync.WaitGroup) {
 			defer wg.Done()
@@ -995,8 +1018,13 @@ var schemaFuzzCmd = &cobra.Command{
 			case requiredArgFieldsJob:
 				results = determineRequiredInputs(job.Object, locArgField)
 			case enumJob:
-				// resolveStack.Push(job.Object.Type.RootName())
-				// results = fuzzFields()
+				resolveStack.Push(job.Object.Type.RootName())
+				if job.Object.Parent != nil {
+					results = fuzzEnumValues(job.Object, locArgField)
+				} else {
+					results = fuzzEnumValues(job.Object, locArg)
+				}
+
 			default:
 				panic(fmt.Sprintf("Unknown job type: %s", job.Type))
 			}
@@ -1025,6 +1053,13 @@ var schemaFuzzCmd = &cobra.Command{
 								Type:     argTypeJob,
 								Object:   fuzzed,
 							})
+						}
+					} else if r.Location == locEnum {
+						if obj.AddPossibleValue(fuzzed) {
+							fuzzed.Parent = nil
+							fuzzed.Caller = nil
+
+							fmt.Printf("[%s] Found: %s - %s\n", job.Type, objPath(obj, ""), fuzzed.Name)
 						}
 					} else if obj.AddField(fuzzed) {
 						fmt.Printf("[%s] Found: %s.%s\n", job.Type, objPath(obj, ""), fuzzed.Name)
