@@ -504,7 +504,9 @@ func (o *Object) GenValue() interface{} {
 
 	if o.valFactory == nil {
 		scalarVal := ScalarGenerator(o.Name, o.Type.RootName())
-		if !strings.Contains(scalarVal.(string), "unknown") {
+
+		v, ok := scalarVal.(string)
+		if !ok || !strings.Contains(v, "unknown") {
 			return scalarVal
 		}
 
