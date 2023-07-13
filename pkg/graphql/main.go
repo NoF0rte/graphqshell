@@ -503,11 +503,13 @@ func (o *Object) GenValue() interface{} {
 	}
 
 	if o.valFactory == nil {
-		scalarVal := ScalarGenerator(o.Name, o.Type.RootName())
+		if len(o.Fields) == 0 && len(o.PossibleValues) == 0 {
+			scalarVal := ScalarGenerator(o.Name, o.Type.RootName())
 
-		v, ok := scalarVal.(string)
-		if !ok || !strings.Contains(v, "unknown") {
-			return scalarVal
+			v, ok := scalarVal.(string)
+			if !ok || !strings.Contains(v, "unknown") {
+				return scalarVal
+			}
 		}
 
 		objRootType := o.Type.RootName()

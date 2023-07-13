@@ -260,10 +260,22 @@ func isKnownScalar(t string) bool {
 	return knownScalars.Contains(rootType)
 }
 
+func isInferredScalar(t string) bool {
+	rootName := graphql.TypeRefFromString(t, "").RootName()
+	re := regexp.MustCompile(`Int|[Ii]nteger|[Ss]tring|[Dd]ate[Tt]ime|[Dd]ate|[Tt]ime|URL|URI`)
+	return re.MatchString(rootName)
+}
+
 func isKnownEnum(t string) bool {
 	typeRef := graphql.TypeRefFromString(t, "")
 	rootType := typeRef.RootName()
 	return knownEnums.Contains(rootType)
+}
+
+func isInferredEnum(t string) bool {
+	rootName := graphql.TypeRefFromString(t, "").RootName()
+	re := regexp.MustCompile(`[Ee]num`)
+	return re.MatchString(rootName)
 }
 
 func objPath(o *graphql.Object, input string) string {
@@ -909,9 +921,9 @@ var schemaFuzzCmd = &cobra.Command{
 					}
 				}
 
-				if isKnownScalar(result.Type) {
+				if isKnownScalar(result.Type) || isInferredScalar(result.Type) {
 					result.Kind = graphql.KindScalar
-				} else if isKnownEnum(result.Type) {
+				} else if isKnownEnum(result.Type) || isInferredEnum(result.Type) {
 					result.Kind = graphql.KindEnum
 				} else if len(obj.Fields) == 0 {
 					typeRef := graphql.TypeRefFromString(result.Type, "")
@@ -1138,6 +1150,14 @@ var schemaFuzzCmd = &cobra.Command{
 							obj.PossibleValues = assignNewParent(o.PossibleValues, obj)
 
 							continue
+						}
+
+						if (r.Kind == "" || r.Kind == graphql.KindObject) && isInferredScalar(r.Type) {
+							r.Kind = graphql.KindScalar
+							obj.Type = *graphql.TypeRefFromString(r.Type, r.Kind)
+						} else if (r.Kind == "" || r.Kind == graphql.KindObject) && isInferredEnum(r.Type) {
+							r.Kind = graphql.KindEnum
+							obj.Type = *graphql.TypeRefFromString(r.Type, r.Kind)
 						}
 
 						if (r.Kind == graphql.KindScalar || r.Kind == graphql.KindEnum) &&
