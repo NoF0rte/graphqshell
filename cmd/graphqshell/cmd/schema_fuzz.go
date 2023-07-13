@@ -383,11 +383,11 @@ var schemaFuzzCmd = &cobra.Command{
 			Name:     "Query",
 			Template: "query {{.Body}}",
 		}
-		// push(&Job{
-		// 	Priority: 100,
-		// 	Type:     fieldTypeJob,
-		// 	Object:   rootQuery,
-		// })
+		push(&Job{
+			Priority: 100,
+			Type:     fieldTypeJob,
+			Object:   rootQuery,
+		})
 
 		rootMutation = &graphql.Object{
 			Name:     "Mutation",
