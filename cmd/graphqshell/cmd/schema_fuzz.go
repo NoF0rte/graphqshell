@@ -473,7 +473,7 @@ var schemaFuzzCmd = &cobra.Command{
 					found := false
 					for _, e := range resp.Result.Errors {
 						if strings.Contains(e.Message, "inline fragment") {
-							fmt.Printf("[!] Found inline fragment. Currently not implemented: %s\n", e.Message)
+							// fmt.Printf("[!] Found inline fragment. Currently not implemented: %s\n", e.Message)
 							continue
 						}
 
@@ -1015,9 +1015,6 @@ var schemaFuzzCmd = &cobra.Command{
 			currentJob, ok = pop()
 			if !ok || currentJob == nil {
 				break
-			}
-			if currentJob.Object.Name != rootQuery.Name && getRootObj(currentJob.Object).Name != "notification" {
-				continue
 			}
 
 			fmt.Printf("[%s] %s\n", currentJob.Type, objPath(currentJob.Object, ""))
