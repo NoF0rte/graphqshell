@@ -70,11 +70,12 @@ var (
 
 	rootQuery    *graphql.Object
 	rootMutation *graphql.Object
+	currentJob   *Job
 )
 
 const (
-	batchFieldSize int = 64
-	batchArgSize   int = 25
+	batchFieldSize  int = 64
+	maxArgTypeRetry int = 5
 )
 
 type Result interface {
@@ -370,8 +371,12 @@ var schemaFuzzCmd = &cobra.Command{
 			return regexp.MustCompile(fmt.Sprintf(`Variable "\$%s" of type "%s" used in position expecting type "([^"]+)"`, regexp.QuoteMeta(variable.Name), regexp.QuoteMeta(variable.Type.String())))
 		}
 		enumNotExistsRe := func(name string, t string) *regexp.Regexp {
+			if t == "" {
+				regexp.MustCompile(fmt.Sprintf(`Value "%s" does not exist in "[^"]+" enum`, regexp.QuoteMeta(name)))
+			}
 			return regexp.MustCompile(fmt.Sprintf(`Value "%s" does not exist in "%s" enum`, regexp.QuoteMeta(name), regexp.QuoteMeta(t)))
 		}
+		nonEnumValueRe := regexp.MustCompile(`Enum "[^"]+" cannot represent non-enum value: (.*)\.`)
 
 		didYouMeanRe := regexp.MustCompile(`Did you mean (.*)\?$`)
 		didYouMeanEnumRe := regexp.MustCompile(`Did you mean the enum value (.*)\?$`)
@@ -460,6 +465,7 @@ var schemaFuzzCmd = &cobra.Command{
 					continue
 				}
 
+			FieldsOuter:
 				for _, f := range fields {
 					word := f.Name
 
@@ -467,8 +473,19 @@ var schemaFuzzCmd = &cobra.Command{
 					found := false
 					for _, e := range resp.Result.Errors {
 						if strings.Contains(e.Message, "inline fragment") {
-							fmt.Printf("[!] Found inline fragment. Currently not implemented\n")
+							fmt.Printf("[!] Found inline fragment. Currently not implemented: %s\n", e.Message)
 							continue
+						}
+
+						// If this matches, then it is an enum and doesn't have fields
+						if enumNotExistsRe(word, "").MatchString(e.Message) {
+							break FieldsOuter
+						}
+
+						// If this matches, then it is an enum and doesn't have fields
+						matches := nonEnumValueRe.FindStringSubmatch(e.Message)
+						if len(matches) > 0 && strings.Contains(matches[1], fmt.Sprintf("%s: graphqshell_arg_field", word)) {
+							break FieldsOuter
 						}
 
 						if !re(word).MatchString(e.Message) {
@@ -484,7 +501,7 @@ var schemaFuzzCmd = &cobra.Command{
 
 						suggestions := didYouMeanMatches[1]
 						suggestions = orRe.ReplaceAllString(suggestions, " ")
-						matches := graphqlRe.FindAllString(suggestions, -1)
+						matches = graphqlRe.FindAllString(suggestions, -1)
 						if len(matches) == 0 {
 							continue
 						}
@@ -836,13 +853,18 @@ var schemaFuzzCmd = &cobra.Command{
 				} else {
 					caller := getMinFields(obj.Caller)
 					if caller == nil {
+						newPriority := currentJob.Priority - 10
+						if newPriority < 0 {
+							fmt.Printf("[!] Stopping getting arg type for %s\n", objPath(&obj, ""))
+							return
+						}
+
+						push(&Job{
+							Priority: newPriority,
+							Type:     argTypeJob,
+							Object:   o,
+						})
 						return
-						// push(&Job{
-						// 	Priority: 20,
-						// 	Type:     argTypeJob,
-						// 	Object:   o,
-						// })
-						// return
 					}
 
 					obj.Caller = caller
@@ -988,45 +1010,49 @@ var schemaFuzzCmd = &cobra.Command{
 			return c
 		}
 
+		var ok bool
 		for {
-			job, ok := pop()
-			if !ok || job == nil {
+			currentJob, ok = pop()
+			if !ok || currentJob == nil {
 				break
 			}
+			if currentJob.Object.Name != rootQuery.Name && getRootObj(currentJob.Object).Name != "notification" {
+				continue
+			}
 
-			fmt.Printf("[%s] %s\n", job.Type, objPath(job.Object, ""))
+			fmt.Printf("[%s] %s\n", currentJob.Type, objPath(currentJob.Object, ""))
 
 			hadResults := false
 			var results chan Result
-			switch job.Type {
+			switch currentJob.Type {
 			case fieldJob:
-				resolveStack.Push(job.Object.Type.RootName())
-				results = fuzzFields(job.Object, locField)
+				resolveStack.Push(currentJob.Object.Type.RootName())
+				results = fuzzFields(currentJob.Object, locField)
 			case fieldTypeJob:
-				results = determineFieldType(job.Object)
+				results = determineFieldType(currentJob.Object)
 			case argJob:
-				results = fuzzArgs(job.Object)
+				results = fuzzArgs(currentJob.Object)
 			case argTypeJob:
-				results = determineArgType(job.Object, locArg)
+				results = determineArgType(currentJob.Object, locArg)
 			case argFieldJob:
-				resolveStack.Push(job.Object.Type.RootName())
-				results = fuzzFields(job.Object, locArgField)
+				resolveStack.Push(currentJob.Object.Type.RootName())
+				results = fuzzFields(currentJob.Object, locArgField)
 			case argFieldTypeJob:
-				results = determineArgType(job.Object, locArgField)
+				results = determineArgType(currentJob.Object, locArgField)
 			case requiredArgsJob:
-				results = determineRequiredInputs(job.Object, locArg)
+				results = determineRequiredInputs(currentJob.Object, locArg)
 			case requiredArgFieldsJob:
-				results = determineRequiredInputs(job.Object, locArgField)
+				results = determineRequiredInputs(currentJob.Object, locArgField)
 			case enumJob:
-				resolveStack.Push(job.Object.Type.RootName())
-				if job.Object.Parent != nil {
-					results = fuzzEnumValues(job.Object, locArgField)
+				resolveStack.Push(currentJob.Object.Type.RootName())
+				if currentJob.Object.Parent != nil {
+					results = fuzzEnumValues(currentJob.Object, locArgField)
 				} else {
-					results = fuzzEnumValues(job.Object, locArg)
+					results = fuzzEnumValues(currentJob.Object, locArg)
 				}
 
 			default:
-				panic(fmt.Sprintf("Unknown job type: %s", job.Type))
+				panic(fmt.Sprintf("Unknown job type: %s", currentJob.Type))
 			}
 
 			for result := range results {
@@ -1046,7 +1072,7 @@ var schemaFuzzCmd = &cobra.Command{
 							fuzzed.Parent = nil
 							fuzzed.Caller = obj
 
-							fmt.Printf("[%s] Found: %s(%s)\n", job.Type, objPath(obj, ""), fuzzed.Name)
+							fmt.Printf("[%s] Found: %s(%s)\n", currentJob.Type, objPath(obj, ""), fuzzed.Name)
 
 							push(&Job{
 								Priority: 50,
@@ -1059,10 +1085,10 @@ var schemaFuzzCmd = &cobra.Command{
 							fuzzed.Parent = nil
 							fuzzed.Caller = nil
 
-							fmt.Printf("[%s] Found: %s - %s\n", job.Type, objPath(obj, ""), fuzzed.Name)
+							fmt.Printf("[%s] Found: %s - %s\n", currentJob.Type, objPath(obj, ""), fuzzed.Name)
 						}
 					} else if obj.AddField(fuzzed) {
-						fmt.Printf("[%s] Found: %s.%s\n", job.Type, objPath(obj, ""), fuzzed.Name)
+						fmt.Printf("[%s] Found: %s.%s\n", currentJob.Type, objPath(obj, ""), fuzzed.Name)
 
 						if r.Location == locField {
 							push(&Job{
@@ -1087,7 +1113,7 @@ var schemaFuzzCmd = &cobra.Command{
 					if obj.Name == rootQuery.Name || obj.Name == rootMutation.Name {
 						obj.Name = r.Type
 					} else {
-						fmt.Printf("[%s] Found: %s %s\n", job.Type, objPath(obj, ""), r.Type)
+						fmt.Printf("[%s] Found: %s %s\n", currentJob.Type, objPath(obj, ""), r.Type)
 
 						ref := graphql.TypeRefFromString(r.Type, r.Kind)
 						obj.Type = *ref
@@ -1132,6 +1158,7 @@ var schemaFuzzCmd = &cobra.Command{
 							continue
 						}
 						if r.Kind == graphql.KindEnum {
+							obj.SetValue("graphqshell_enum")
 							push(&Job{
 								Priority: 20,
 								Type:     enumJob,
@@ -1156,9 +1183,16 @@ var schemaFuzzCmd = &cobra.Command{
 						})
 					}
 				case *RequiredResult:
+					kind := ""
+					if isKnownScalar(r.Type) {
+						kind = graphql.KindScalar
+					} else if isKnownEnum(r.Type) {
+						kind = graphql.KindEnum
+					}
+
 					fuzzed := &graphql.Object{
 						Name:   r.Text,
-						Type:   *graphql.TypeRefFromString(r.Type, ""),
+						Type:   *graphql.TypeRefFromString(r.Type, kind),
 						Parent: obj,
 					}
 
@@ -1166,35 +1200,45 @@ var schemaFuzzCmd = &cobra.Command{
 					foundWordsSet.Add(rootName)
 					foundWordsSet.Add(rootName[:len(rootName)-1])
 
-					fuzzed.SetValue(map[string]interface{}{})
+					if isKnownScalar(r.Type) {
+						fuzzed.SetValue(nil)
+						fuzzed.SetValue(fuzzed.GenValue())
+					} else {
+						fuzzed.SetValue(map[string]interface{}{})
+					}
+
 					if r.Location == locArg {
+						fmt.Printf("[%s] Found: %s(%s %s)\n", currentJob.Type, objPath(obj, ""), fuzzed.Name, r.Type)
+
 						fuzzed.Parent = nil
 						fuzzed.Caller = obj
 
 						obj.AddArg(fuzzed)
 
-						push(&Job{
-							Priority: 110,
-							Type:     requiredArgFieldsJob,
-							Object:   fuzzed,
-						})
+						if isKnownScalar(r.Type) {
+							continue
+						}
+
+						if !isKnownEnum(r.Type) {
+							push(&Job{
+								Priority: 110,
+								Type:     requiredArgFieldsJob,
+								Object:   fuzzed,
+							})
+						}
+
 						push(&Job{
 							Priority: 50,
 							Type:     argTypeJob,
 							Object:   fuzzed,
 						})
 					} else {
+						fmt.Printf("[%s] Found: %s.%s %s\n", currentJob.Type, objPath(obj, ""), fuzzed.Name, r.Type)
+
 						obj.AddField(fuzzed)
 						obj.SetValue(nil)
 
-						if isKnownScalar(r.Type) {
-							fuzzed.Type = *graphql.TypeRefFromString(r.Type, graphql.KindScalar)
-
-							fuzzed.SetValue(nil)
-							fuzzed.SetValue(fuzzed.GenValue())
-						} else if isKnownEnum(r.Type) {
-							fuzzed.Type = *graphql.TypeRefFromString(r.Type, graphql.KindScalar)
-						} else {
+						if !isKnownScalar(r.Type) && !isKnownEnum(r.Type) {
 							push(&Job{
 								Priority: 110,
 								Type:     requiredArgFieldsJob,
@@ -1210,58 +1254,58 @@ var schemaFuzzCmd = &cobra.Command{
 				}
 			}
 
-			if job.Type == fieldJob || job.Type == argFieldJob || job.Type == enumJob {
+			if currentJob.Type == fieldJob || currentJob.Type == argFieldJob || currentJob.Type == enumJob {
 				resolveStack.Pop()
 
-				rootName := job.Object.Type.RootName()
+				rootName := currentJob.Object.Type.RootName()
 				defered := deferResolve[rootName]
 				for _, fn := range defered {
-					fn(job.Object)
+					fn(currentJob.Object)
 				}
 
 				delete(deferResolve, rootName)
 
-				if job.Type == fieldJob && job.Object.Parent != nil {
+				if currentJob.Type == fieldJob && currentJob.Object.Parent != nil {
 					push(&Job{
 						Priority: 55,
 						Type:     argJob,
-						Object:   job.Object,
+						Object:   currentJob.Object,
 					})
 					push(&Job{
 						Priority: 120,
 						Type:     requiredArgsJob,
-						Object:   job.Object,
+						Object:   currentJob.Object,
 					})
 				}
 
 				// If there were no fields found, it could be the type isn't an object
 				// Fuzz for enum values
-				if job.Type == argFieldJob && !hadResults {
+				if currentJob.Type == argFieldJob && !hadResults {
 					push(&Job{
-						Priority: job.Priority,
+						Priority: currentJob.Priority,
 						Type:     enumJob,
-						Object:   job.Object,
-						Previous: job,
+						Object:   currentJob.Object,
+						Previous: currentJob,
 					})
 				}
 
 				// If no results on an enum fuzz and the previous job was a field fuzz
 				// that means we couldn't find any fields or enum values. Maybe safe to say
 				// that the object is a Scalar
-				if job.Type == enumJob && !hadResults && job.Previous != nil && job.Previous.Type == argFieldJob {
-					job.Object.Type = *graphql.TypeRefFromString(job.Object.Type.String(), graphql.KindScalar)
-					knownScalars.Add(job.Object.Type.RootName())
+				if currentJob.Type == enumJob && !hadResults && currentJob.Previous != nil && currentJob.Previous.Type == argFieldJob {
+					currentJob.Object.Type = *graphql.TypeRefFromString(currentJob.Object.Type.String(), graphql.KindScalar)
+					knownScalars.Add(currentJob.Object.Type.RootName())
 				}
 
-				objCache[rootName] = job.Object
+				objCache[rootName] = currentJob.Object
 
-				if job.Object.Name == rootQuery.Name {
+				if currentJob.Object.Name == rootQuery.Name {
 					for _, f := range rootQuery.Fields {
 						f.Template = graphql.QueryTemplate
 					}
 				}
 
-				if job.Object.Name == rootMutation.Name {
+				if currentJob.Object.Name == rootMutation.Name {
 					for _, f := range rootMutation.Fields {
 						f.Template = graphql.MutationTemplate
 					}

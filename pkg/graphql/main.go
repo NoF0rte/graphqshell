@@ -649,10 +649,7 @@ func (o *Object) ToGraphQL(vars ...*Variable) (string, error) {
 		"printArgs": func() string {
 			var args []string
 			for _, a := range o.Args {
-				argMutex.Lock()
 				arg := a.ToArgStr()
-				argMutex.Unlock()
-
 				args = append(args, arg)
 			}
 			return strings.Join(args, ", ")
@@ -719,6 +716,9 @@ func toArgStr(name string, val interface{}) string {
 }
 
 func (o *Object) ToArgStr() string {
+	argMutex.Lock()
+	defer argMutex.Unlock()
+
 	arg := toArgStr(o.Name, o.GenValue())
 	if o.Type.RootKind() == KindEnum {
 		name, val, _ := strings.Cut(arg, ":")
