@@ -1277,7 +1277,7 @@ var schemaFuzzCmd = &cobra.Command{
 			Mutations: rootMutation.Fields,
 		})
 
-		bytes, err := json.Marshal(&resp)
+		bytes, err := json.MarshalIndent(&resp, "", "  ")
 		if err != nil {
 			fmt.Printf("[!] Error: %v\n", err)
 			return
