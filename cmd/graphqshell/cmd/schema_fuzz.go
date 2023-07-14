@@ -1411,7 +1411,7 @@ var schemaFuzzCmd = &cobra.Command{
 
 				delete(deferResolve, rootName)
 
-				if currentJob.Type == fieldJob && currentJob.Object.Parent != nil {
+				if currentJob.Type == fieldJob && currentJob.Object.Parent != nil && currentJob.Object.Parent.Type.RootKind() != graphql.KindInterface {
 					push(&Job{
 						Priority: 55,
 						Type:     argJob,
