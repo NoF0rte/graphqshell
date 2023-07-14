@@ -268,7 +268,7 @@ func isKnownScalar(t string) bool {
 
 func isInferredScalar(t string) bool {
 	rootName := graphql.TypeRefFromString(t, "").RootName()
-	re := regexp.MustCompile(`Int|[Ii]nteger|[Ss]tring|[Dd]ate[Tt]ime|[Dd]ate|[Tt]ime|URL|URI`)
+	re := regexp.MustCompile(`Int(?:[A-Z]|\b)|[Ii]nteger|[Ss]tring|[Dd]ate[Tt]ime|[Dd]ate|[Tt]ime|URL|URI`)
 	return re.MatchString(rootName)
 }
 
