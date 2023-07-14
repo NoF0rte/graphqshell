@@ -38,7 +38,7 @@ const (
 )
 
 const gqlTemplate string = `
-{{- if (isEmpty .Fields) -}}
+{{- if isLeaf . -}}
 	{{ .Name }}
 {{- else -}}
 
@@ -49,6 +49,11 @@ const gqlTemplate string = `
 {{- end}}
 {{ range .Fields -}}
 	{{ toGraphQL . | println }}
+{{- end -}}
+{{ range .PossibleValues -}}
+	{{ if (not (isLeaf .)) -}}
+		{{ toFragment . | println }}
+	{{- end -}}
 {{- end -}}
 }
 
@@ -631,6 +636,18 @@ func (o *Object) GenArg(name string) interface{} {
 
 func (o *Object) ToGraphQL(vars ...*Variable) (string, error) {
 	funcMap := template.FuncMap{
+		"isLeaf": func(o *Object) bool {
+			isInterface := o.Type.RootKind() == KindInterface
+			emptyFields := len(o.Fields) == 0
+			emptyPossibleVals := len(o.PossibleValues) == 0
+
+			if (!isInterface && emptyFields) ||
+				(isInterface && emptyPossibleVals && emptyFields) {
+				return true
+			}
+
+			return false
+		},
 		"isEmpty": func(slice interface{}) bool {
 			tp := reflect.TypeOf(slice).Kind()
 			switch tp {
@@ -641,6 +658,9 @@ func (o *Object) ToGraphQL(vars ...*Variable) (string, error) {
 				return false
 			}
 		},
+		"isInterface": func(o *Object) bool {
+			return o.Type.RootKind() == KindInterface
+		},
 		"toGraphQL": func(obj *Object) (string, error) {
 			output, err := obj.ToGraphQL(vars...)
 			if err != nil {
@@ -649,6 +669,19 @@ func (o *Object) ToGraphQL(vars ...*Variable) (string, error) {
 
 			// Indent once
 			return indent(output), nil
+		},
+		"toFragment": func(obj *Object) (string, error) {
+			output, err := obj.ToGraphQL(vars...)
+			if err != nil {
+				return "", err
+			}
+
+			if !strings.Contains(output, "{") {
+				return "", nil
+			}
+
+			// Indent once
+			return indent(fmt.Sprintf("... on %s", output)), nil
 		},
 		"printArgs": func() string {
 			var args []string
@@ -767,6 +800,16 @@ func (o *Object) AddPossibleValue(value *Object) bool {
 
 	o.PossibleValues = append(o.PossibleValues, value)
 	return true
+}
+
+func (o *Object) GetPossibleValue(name string) *Object {
+	for _, v := range o.PossibleValues {
+		if v.Name == name {
+			return v
+		}
+	}
+
+	return nil
 }
 
 // func (o *Object) Copy() *Object {
