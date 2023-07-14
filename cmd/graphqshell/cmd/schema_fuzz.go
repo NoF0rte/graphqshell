@@ -578,7 +578,9 @@ var schemaFuzzCmd = &cobra.Command{
 							}
 
 							foundWordsSet.Add(field)
-							foundWordsSet.Add(field[:len(field)-1])
+							if len(field) > 1 {
+								foundWordsSet.Add(field[:len(field)-1])
+							}
 						}
 
 						break
@@ -596,6 +598,16 @@ var schemaFuzzCmd = &cobra.Command{
 
 					// Can happen when the word is an exact match
 					if !handled && !found {
+						// If the word is 1 letter, assume it is an exact match for now
+						if len(word) == 1 {
+							results <- &FuzzResult{
+								Text:     word,
+								Location: loc,
+								obj:      o,
+							}
+							continue
+						}
+
 						name := word[:len(word)-1]
 						obj.Fields = []*graphql.Object{
 							createField(name),
@@ -706,6 +718,15 @@ var schemaFuzzCmd = &cobra.Command{
 
 				// Can happen when the word is an exact match
 				if !handled && !found {
+					if len(word) == 1 {
+						results <- &FuzzResult{
+							Text:     word,
+							Location: locEnum,
+							obj:      o,
+						}
+						continue
+					}
+
 					value := word[:len(word)-1]
 					obj.SetValue(value)
 
@@ -796,7 +817,9 @@ var schemaFuzzCmd = &cobra.Command{
 							}
 
 							foundWordsSet.Add(arg)
-							foundWordsSet.Add(arg[:len(arg)-1])
+							if len(arg) > 1 {
+								foundWordsSet.Add(arg[:len(arg)-1])
+							}
 						}
 					}
 
@@ -818,6 +841,15 @@ var schemaFuzzCmd = &cobra.Command{
 					// Can happen when the word is an exact match
 					// Let's do some checks to make sure it isn't a false positive
 					if !handled && !found {
+						if len(word) == 1 {
+							results <- &FuzzResult{
+								Text:     word,
+								Location: locArg,
+								obj:      o,
+							}
+							continue
+						}
+
 						name := word[:len(word)-1]
 						obj.Args = []*graphql.Object{
 							{
@@ -1344,7 +1376,9 @@ var schemaFuzzCmd = &cobra.Command{
 
 					rootName := fuzzed.Type.RootName()
 					foundWordsSet.Add(rootName)
-					foundWordsSet.Add(rootName[:len(rootName)-1])
+					if len(rootName) > 1 {
+						foundWordsSet.Add(rootName[:len(rootName)-1])
+					}
 
 					if isKnownScalar(r.Type) {
 						fuzzed.SetValue(nil)
