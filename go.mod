@@ -1,8 +1,9 @@
 module github.com/NoF0rte/graphqshell
 
-go 1.19
+go 1.20
 
 require (
+	github.com/analog-substance/fileutil v0.0.3
 	github.com/analog-substance/tengo/v2 v2.13.1
 	github.com/analog-substance/tengomod v0.5.0
 	github.com/chzyer/readline v1.5.1
@@ -14,7 +15,6 @@ require (
 
 require (
 	github.com/analog-substance/ffufwrap v0.0.2 // indirect
-	github.com/analog-substance/fileutil v0.0.3 // indirect
 	github.com/analog-substance/nmap/v3 v3.0.2 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.6.0 // indirect
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
