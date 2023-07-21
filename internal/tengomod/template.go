@@ -6,7 +6,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/NoF0rte/graphqshell/pkg/graphql"
+	"github.com/NoF0rte/graphqshell/internal/graphql"
 )
 
 var funcMap template.FuncMap

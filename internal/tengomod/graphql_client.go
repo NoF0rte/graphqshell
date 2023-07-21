@@ -3,7 +3,7 @@ package tengomod
 import (
 	"encoding/json"
 
-	"github.com/NoF0rte/graphqshell/pkg/graphql"
+	"github.com/NoF0rte/graphqshell/internal/graphql"
 	"github.com/analog-substance/tengo/v2"
 	"github.com/analog-substance/tengomod/interop"
 	"github.com/analog-substance/tengomod/types"

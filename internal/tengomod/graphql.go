@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"os"
 
-	"github.com/NoF0rte/graphqshell/pkg/graphql"
+	"github.com/NoF0rte/graphqshell/internal/graphql"
 	"github.com/analog-substance/tengo/v2"
 	"github.com/analog-substance/tengomod/interop"
 )

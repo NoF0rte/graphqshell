@@ -3,7 +3,7 @@ GraphQShell is a GraphQL pentesting scripting engine. Using the Go scripting eng
 
 ## Getting Started
 ### Install
-GraphQShell requires Go v1.19+ to install
+GraphQShell requires Go v1.20+ to install
 
 ```
 go install github.com/NoF0rte/graphqshell/cmd/graphqshell@latest
@@ -76,4 +76,4 @@ graphql := import("graphql")
 - [ ] PostJSON/GraphQL should return a result object
 - [ ] More intuitive Tengo functionality
   - [ ] Settings arg default values
-
+- [ ] Create/update schema from user supplied information

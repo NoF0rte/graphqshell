@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"github.com/NoF0rte/graphqshell/internal/ds"
-	"github.com/NoF0rte/graphqshell/pkg/graphql"
+	"github.com/NoF0rte/graphqshell/internal/graphql"
 	"github.com/analog-substance/fileutil"
 	"github.com/emirpasic/gods/queues/priorityqueue"
 	"github.com/emirpasic/gods/sets/hashset"
