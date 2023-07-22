@@ -3,6 +3,7 @@ package tengomod
 import (
 	"bytes"
 	"fmt"
+	"reflect"
 	"strings"
 	"text/template"
 
@@ -30,6 +31,35 @@ func execTemplate(tpl *template.Template, context interface{}) (string, error) {
 
 func init() {
 	funcMap = template.FuncMap{
+		"isEmpty": func(slice interface{}) bool {
+			tp := reflect.TypeOf(slice).Kind()
+			switch tp {
+			case reflect.Slice, reflect.Array:
+				l2 := reflect.ValueOf(slice)
+				return l2.Len() == 0
+			default:
+				return false
+			}
+		},
+		"isInterface": func(o *graphql.Object) bool {
+			return o.Type.RootKind() == graphql.KindInterface
+		},
+		"isEnum": func(o *graphql.Object) bool {
+			return o.Type.RootKind() == graphql.KindEnum
+		},
+		// "toFragment": func(obj *graphql.Object) (string, error) {
+		// 	output, err := obj.ToGraphQL(vars...)
+		// 	if err != nil {
+		// 		return "", err
+		// 	}
+
+		// 	if !strings.Contains(output, "{") {
+		// 		return "", nil
+		// 	}
+
+		// 	// Indent once
+		// 	return indent(fmt.Sprintf("... on %s", output)), nil
+		// },
 		"argSignature": func(objs []*graphql.Object) string {
 			if len(objs) == 0 {
 				return ""
@@ -75,14 +105,20 @@ func init() {
 {{- if ne (len .Description) 0 -}}
 	// {{ .Description | println }}
 {{- end -}}
-{{- if ne (len .Fields) 0 -}}
+{{- if (isEnum .) -}}
+{{.Name}} {
+	{{- range .PossibleValues -}}
+		{{ .Name | printf "\n%s" | indent }}
+	{{- end }}
+}
+{{- else if (and (not (isInterface .)) (isEmpty .Fields)) -}}
+{{ fieldSignature . }}
+{{- else -}}
 {{.Name}}{{.Args | argSignature}} {
 	{{- range .Fields -}}
 		{{ fieldSignature . | printf "\n%s" | indent }}
 	{{- end }}
 }
-{{- else -}}
-{{ fieldSignature . }}
 {{- end -}}`
 
 	objSigTemplate = template.Must(template.New("objSig").Funcs(funcMap).Parse(objSigTemplateStr))
