@@ -304,6 +304,15 @@ func (t TypeRef) RootKind() string {
 	return t.OfType.RootKind()
 }
 
+func (t *TypeRef) SetRootKind(kind string) {
+	if t.OfType == nil {
+		t.Kind = kind
+		return
+	}
+
+	t.OfType.SetRootKind(kind)
+}
+
 func (t TypeRef) IsScalar() bool {
 	if t.OfType == nil {
 		return t.Kind == KindScalar
@@ -1032,7 +1041,7 @@ func toInterface(o *Object) FullType {
 	return t
 }
 
-func ToIntrospection(rootQuery *RootQuery, rootMutation *RootMutation) IntrospectionResponse {
+func ToIntrospection(rootQuery *RootQuery, rootMutation *RootMutation, objMap map[string]*Object) IntrospectionResponse {
 	typeSet := hashset.New()
 	var fullTypes []FullType
 
@@ -1060,16 +1069,28 @@ func ToIntrospection(rootQuery *RootQuery, rootMutation *RootMutation) Introspec
 			fullTypes = append(fullTypes, fullType)
 
 			for _, field := range o.Fields {
-				walkObject(field, field.Type.RootKind())
+				obj, ok := objMap[field.Type.RootName()]
+				if !ok {
+					obj = field
+				}
+				walkObject(obj, field.Type.RootKind())
 			}
 		}
 
 		for _, arg := range o.Args {
-			walkObject(arg, arg.Type.RootKind())
+			obj, ok := objMap[arg.Type.RootName()]
+			if !ok {
+				obj = arg
+			}
+			walkObject(obj, arg.Type.RootKind())
 		}
 
 		for _, v := range o.PossibleValues {
-			walkObject(v, v.Type.RootKind())
+			obj, ok := objMap[v.Type.RootName()]
+			if !ok {
+				obj = v
+			}
+			walkObject(obj, v.Type.RootKind())
 		}
 	}
 
