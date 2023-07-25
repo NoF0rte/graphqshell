@@ -57,6 +57,12 @@ func (j *Job) isAnyType(types ...jobType) bool {
 	return false
 }
 
+const (
+	batchFieldSize int = 64
+
+	graphqlNameRe string = "[_A-Za-z][_0-9A-Za-z]*"
+)
+
 var (
 	cacheMutex   *sync.Mutex                    = &sync.Mutex{}
 	objCache     map[string]*graphql.Object     = make(map[string]*graphql.Object)
@@ -80,13 +86,52 @@ var (
 	)
 	knownEnums *ds.ThreadSafeSet = ds.NewThreadSafeSet()
 
-	rootQuery    *graphql.Object
-	rootMutation *graphql.Object
-	currentJob   *Job
-)
+	rootQuery = &graphql.Object{
+		Name:     "Query",
+		Template: "query {{.Body}}",
+	}
+	rootMutation = &graphql.Object{
+		Name:     "Mutation",
+		Template: "mutation {{.Body}}",
+	}
 
-const (
-	batchFieldSize int = 64
+	currentJob *Job
+
+	nonEnumValueRe = regexp.MustCompile(`Enum "[^"]+" cannot represent non-enum value: (.*)\.`)
+	didYouMeanRe   = regexp.MustCompile(`Did you mean(?: the enum value| to use an inline fragment on)? (.*)\?$`)
+	graphqlRe      = regexp.MustCompile(graphqlNameRe)
+	orRe           = regexp.MustCompile(" or ")
+
+	queryFieldRe = func(name string) *regexp.Regexp {
+		return regexp.MustCompile(fmt.Sprintf(`Cannot query field "%s" on type "(%s)"`, regexp.QuoteMeta(name), graphqlNameRe))
+	}
+	noSubfieldsRe = func(name string) *regexp.Regexp {
+		return regexp.MustCompile(fmt.Sprintf(`Field "%s".*"([^"]+)" has no subfields`, regexp.QuoteMeta(name)))
+	}
+	fieldOfTypeRe = func(name string) *regexp.Regexp {
+		return regexp.MustCompile(fmt.Sprintf(`Field \"%s\" of type \"([^"]+)\"`, regexp.QuoteMeta(name)))
+	}
+	requiredArgRe = func(name string) *regexp.Regexp {
+		return regexp.MustCompile(fmt.Sprintf(`Field "%s" argument "(%s)" of type "([^"]+)" is required`, regexp.QuoteMeta(name), graphqlNameRe))
+	}
+	requiredArgFieldRe = func(t string) *regexp.Regexp {
+		return regexp.MustCompile(fmt.Sprintf(`Field "?%s\.(%s)"? of required type "?(.*?)"? was not provided`, regexp.QuoteMeta(t), graphqlNameRe))
+	}
+	fieldNotDefinedRe = func(name string) *regexp.Regexp {
+		return regexp.MustCompile(fmt.Sprintf(`Field "%s" is not defined by %s`, regexp.QuoteMeta(name), graphqlNameRe))
+	}
+	expectedTypeRe = func(name string) *regexp.Regexp {
+		return regexp.MustCompile(fmt.Sprintf("Expected type ([^,]+), found %s", regexp.QuoteMeta(name)))
+	}
+	expectingTypeRe = func(variable *graphql.Variable) *regexp.Regexp {
+		return regexp.MustCompile(fmt.Sprintf(`Variable "\$%s" of type "%s" used in position expecting type "([^"]+)"`, regexp.QuoteMeta(variable.Name), regexp.QuoteMeta(variable.Type.String())))
+	}
+	enumNotExistsRe = func(name string, t string) *regexp.Regexp {
+		if t == "" {
+			regexp.MustCompile(fmt.Sprintf(`Value "%s" does not exist in "[^"]+" enum`, regexp.QuoteMeta(name)))
+		}
+		return regexp.MustCompile(fmt.Sprintf(`Value "%s" does not exist in "%s" enum`, regexp.QuoteMeta(name), regexp.QuoteMeta(t)))
+	}
 )
 
 type Result interface {
@@ -281,7 +326,7 @@ func tryGetCached(o *graphql.Object) *graphql.Object {
 }
 
 func shallowMergeUpdate(o1 *graphql.Object, o2 *graphql.Object) {
-	o1.Args = o2.Args
+	// o1.Args = o2.Args
 	o1.Fields = o2.Fields
 	o1.PossibleValues = o2.PossibleValues
 }
@@ -293,6 +338,7 @@ func shallowMergeNew(o1 *graphql.Object, o2 *graphql.Object) *graphql.Object {
 		Parent:   o1.Parent,
 		Caller:   o1.Caller,
 		Template: o1.Template,
+		Args:     o1.Args,
 	}
 	shallowMergeUpdate(merged, o2)
 	return merged
@@ -470,6 +516,19 @@ func addFoundWord(word string) {
 	}
 }
 
+func pushArgJobs(o *graphql.Object) {
+	push(&Job{
+		Priority: 55,
+		Type:     jobArg,
+		Object:   o,
+	})
+	push(&Job{
+		Priority: 120,
+		Type:     jobRequiredArgs,
+		Object:   o,
+	})
+}
+
 // schemaFuzzCmd represents the fuzz command
 var schemaFuzzCmd = &cobra.Command{
 	Use:   "fuzz",
@@ -537,53 +596,6 @@ var schemaFuzzCmd = &cobra.Command{
 			return c
 		}
 
-		graphqlNameRe := "[_A-Za-z][_0-9A-Za-z]*"
-
-		nonEnumValueRe := regexp.MustCompile(`Enum "[^"]+" cannot represent non-enum value: (.*)\.`)
-		didYouMeanRe := regexp.MustCompile(`Did you mean(?: the enum value| to use an inline fragment on)? (.*)\?$`)
-		graphqlRe := regexp.MustCompile(graphqlNameRe)
-		orRe := regexp.MustCompile(" or ")
-
-		queryFieldRe := func(name string) *regexp.Regexp {
-			return regexp.MustCompile(fmt.Sprintf(`Cannot query field "%s" on type "(%s)"`, regexp.QuoteMeta(name), graphqlNameRe))
-		}
-		noSubfieldsRe := func(name string) *regexp.Regexp {
-			return regexp.MustCompile(fmt.Sprintf(`Field "%s".*"([^"]+)" has no subfields`, regexp.QuoteMeta(name)))
-		}
-		fieldOfTypeRe := func(name string) *regexp.Regexp {
-			return regexp.MustCompile(fmt.Sprintf(`Field \"%s\" of type \"([^"]+)\"`, regexp.QuoteMeta(name)))
-		}
-		requiredArgRe := func(name string) *regexp.Regexp {
-			return regexp.MustCompile(fmt.Sprintf(`Field "%s" argument "(%s)" of type "([^"]+)" is required`, regexp.QuoteMeta(name), graphqlNameRe))
-		}
-		requiredArgFieldRe := func(t string) *regexp.Regexp {
-			return regexp.MustCompile(fmt.Sprintf(`Field "?%s\.(%s)"? of required type "?(.*?)"? was not provided`, regexp.QuoteMeta(t), graphqlNameRe))
-		}
-		fieldNotDefinedRe := func(name string) *regexp.Regexp {
-			return regexp.MustCompile(fmt.Sprintf(`Field "%s" is not defined by %s`, regexp.QuoteMeta(name), graphqlNameRe))
-		}
-		expectedTypeRe := func(name string) *regexp.Regexp {
-			return regexp.MustCompile(fmt.Sprintf("Expected type ([^,]+), found %s", regexp.QuoteMeta(name)))
-		}
-		expectingTypeRe := func(variable *graphql.Variable) *regexp.Regexp {
-			return regexp.MustCompile(fmt.Sprintf(`Variable "\$%s" of type "%s" used in position expecting type "([^"]+)"`, regexp.QuoteMeta(variable.Name), regexp.QuoteMeta(variable.Type.String())))
-		}
-		enumNotExistsRe := func(name string, t string) *regexp.Regexp {
-			if t == "" {
-				regexp.MustCompile(fmt.Sprintf(`Value "%s" does not exist in "[^"]+" enum`, regexp.QuoteMeta(name)))
-			}
-			return regexp.MustCompile(fmt.Sprintf(`Value "%s" does not exist in "%s" enum`, regexp.QuoteMeta(name), regexp.QuoteMeta(t)))
-		}
-
-		rootQuery = &graphql.Object{
-			Name:     "Query",
-			Template: "query {{.Body}}",
-		}
-		rootMutation = &graphql.Object{
-			Name:     "Mutation",
-			Template: "mutation {{.Body}}",
-		}
-
 		for _, target := range fuzzTargets {
 			root, field, _ := strings.Cut(target, ".")
 			obj := &graphql.Object{
@@ -620,6 +632,9 @@ var schemaFuzzCmd = &cobra.Command{
 			defer wg.Done()
 
 			obj := copyFromCache(o)
+			if len(obj.Args) > 0 {
+				fmt.Println("[!] Copied cache had args")
+			}
 
 			re := queryFieldRe
 			createField := func(word string) *graphql.Object {
@@ -803,6 +818,9 @@ var schemaFuzzCmd = &cobra.Command{
 			defer wg.Done()
 
 			obj := copyFromCache(o)
+			if len(obj.Args) > 0 {
+				fmt.Println("[!] Copied cache had args")
+			}
 
 			caller := walkObject(obj, directionCaller)
 			caller = getMinFields(caller)
@@ -934,7 +952,6 @@ var schemaFuzzCmd = &cobra.Command{
 			defer wg.Done()
 
 			obj := copyFromCache(o)
-
 			obj.Fields = []*graphql.Object{
 				{Name: "graphqlshell_field"},
 			}
@@ -1045,11 +1062,6 @@ var schemaFuzzCmd = &cobra.Command{
 
 			foundWords := foundWordsSet.Values()
 			go func() {
-				obj := copyFromCache(o)
-				obj.Fields = append(obj.Fields, &graphql.Object{
-					Name: "graphqshell_field",
-				})
-
 				wg := &sync.WaitGroup{}
 				words := getWords(foundWords)
 				for i := 0; i < threads; i++ {
@@ -1068,9 +1080,14 @@ var schemaFuzzCmd = &cobra.Command{
 			c := make(chan Result)
 
 			obj := copyFromCache(o)
+			if len(obj.Args) > 0 {
+				fmt.Println("[!] Copied cache had args")
+			}
 			go func() {
 				defer close(c)
 
+				// Having issues with the args being copied from cache when they shouldn't be
+				// Don't know whether to copy the args or not
 				rootObj := walkObject(obj, directionRoot)
 
 				name := "graphqlshell_field"
@@ -1149,6 +1166,9 @@ var schemaFuzzCmd = &cobra.Command{
 			c := make(chan Result)
 
 			obj := copyFromCache(o)
+			if len(obj.Args) > 0 {
+				fmt.Println("[!] Copied cache had args")
+			}
 			go func() {
 				defer close(c)
 
@@ -1311,6 +1331,9 @@ var schemaFuzzCmd = &cobra.Command{
 			c := make(chan Result)
 
 			obj := copyFromCache(o)
+			if len(obj.Args) > 0 {
+				fmt.Println("[!] Copied cache had args")
+			}
 			go func() {
 				defer close(c)
 
@@ -1369,6 +1392,13 @@ var schemaFuzzCmd = &cobra.Command{
 
 			return c
 		}
+		nopWorker := func() chan Result {
+			c := make(chan Result)
+			go func() {
+				close(c)
+			}()
+			return c
+		}
 
 		var ok bool
 		for {
@@ -1382,43 +1412,49 @@ var schemaFuzzCmd = &cobra.Command{
 			// Given the fact that we are gradually building up the different types
 			// it might be better to defer everything to the end?
 
+			var results chan Result
+
+			// TODO: We need to make sure that even if the type has already been resolved
+			// we still need to get the required/non-required args
 			cached, isCached := objCache[currentJob.Object.Type.RootName()]
 			if isCached && currentJob.isAnyType(jobArgField, jobField, jobEnum) {
 				// Maybe add to deferResolve?
 				shallowMergeUpdate(currentJob.Object, cached)
-				continue
-			}
+				currentJob.Object.Args = []*graphql.Object{} // Need to figure out the args for this instance
 
-			hadResults := false
-			var results chan Result
-			switch currentJob.Type {
-			case jobField:
+				results = nopWorker()
 				resolveStack.Push(currentJob.Object.Type.RootName())
-				results = fuzzFields(currentJob.Object, locField)
-			case jobFieldType:
-				results = determineFieldType(currentJob.Object)
-			case jobArg:
-				results = fuzzArgs(currentJob.Object)
-			case jobArgType:
-				results = determineArgType(currentJob.Object, locArg)
-			case jobArgField:
-				resolveStack.Push(currentJob.Object.Type.RootName())
-				results = fuzzFields(currentJob.Object, locArgField)
-			case jobArgFieldType:
-				results = determineArgType(currentJob.Object, locArgField)
-			case jobRequiredArgs:
-				results = determineRequiredInputs(currentJob.Object, locArg)
-			case jobRequiredArgFields:
-				results = determineRequiredInputs(currentJob.Object, locArgField)
-			case jobEnum:
-				resolveStack.Push(currentJob.Object.Type.RootName())
-				if currentJob.Object.Parent != nil {
-					results = fuzzEnumValues(currentJob.Object, locArgField)
-				} else {
-					results = fuzzEnumValues(currentJob.Object, locArg)
+			} else {
+				switch currentJob.Type {
+				case jobField:
+					resolveStack.Push(currentJob.Object.Type.RootName())
+					results = fuzzFields(currentJob.Object, locField)
+				case jobFieldType:
+					results = determineFieldType(currentJob.Object)
+				case jobArg:
+					results = fuzzArgs(currentJob.Object)
+				case jobArgType:
+					results = determineArgType(currentJob.Object, locArg)
+				case jobArgField:
+					resolveStack.Push(currentJob.Object.Type.RootName())
+					results = fuzzFields(currentJob.Object, locArgField)
+				case jobArgFieldType:
+					results = determineArgType(currentJob.Object, locArgField)
+				case jobRequiredArgs:
+					results = determineRequiredInputs(currentJob.Object, locArg)
+				case jobRequiredArgFields:
+					results = determineRequiredInputs(currentJob.Object, locArgField)
+				case jobEnum:
+					resolveStack.Push(currentJob.Object.Type.RootName())
+					if currentJob.Object.Parent != nil {
+						results = fuzzEnumValues(currentJob.Object, locArgField)
+					} else {
+						results = fuzzEnumValues(currentJob.Object, locArg)
+					}
 				}
 			}
 
+			hadResults := false
 			for result := range results {
 				hadResults = true
 
@@ -1477,11 +1513,6 @@ var schemaFuzzCmd = &cobra.Command{
 									Type:     jobFieldType,
 									Object:   fuzzed,
 								})
-								// push(&Job{
-								// 	Priority: 55,
-								// 	Type:     argJob,
-								// 	Object:   fuzzed,
-								// })
 							} else {
 								push(&Job{
 									Priority: 75,
@@ -1554,6 +1585,12 @@ var schemaFuzzCmd = &cobra.Command{
 						if (r.Kind == graphql.KindEnum && r.Location == locField) || isResolving(rootName) || isQueued(nextJob.Type, rootName) {
 							deferResolve[rootName] = append(deferResolve[rootName], func(i interface{}) {
 								shallowMergeUpdate(obj, i.(*graphql.Object))
+
+								// Even though we know the fields we still need to find the arguments
+								if r.Location == locField && r.Kind != graphql.KindEnum {
+									// obj.Args = []*graphql.Object{}
+									pushArgJobs(obj)
+								}
 							})
 							continue
 						}
@@ -1567,51 +1604,19 @@ var schemaFuzzCmd = &cobra.Command{
 							}
 
 							shallowMergeUpdate(obj, o)
+							if r.Location == locField && r.Kind != graphql.KindEnum {
+								// obj.Args = []*graphql.Object{}
+								pushArgJobs(obj)
+							}
 							continue
 						}
 
 						if r.Kind == graphql.KindScalar {
 							continue
 						}
-
-						// // If we know it is an enum but it is a normal field, we need to make sure
-						// // that we check to see if an enum job is queued for that type so we can update
-						// // the values later. Should find a better way to do this
-						// if r.Kind == graphql.KindEnum && r.Location == locField {
-						// 	nextJob.Priority = 25
-						// 	nextJob.Type = jobField
-						// }
-
-						// if r.Kind == graphql.KindEnum && r.Location != locField {
-
-						// 	push(nextJob)
-						// 	// push(&Job{
-						// 	// 	Priority: 20,
-						// 	// 	Type:     jobEnum,
-						// 	// 	Object:   obj,
-						// 	// })
-						// 	continue
-						// }
 					}
 
 					push(nextJob)
-
-					// switch r.Location {
-					// case locField:
-					// 	push(nextJob)
-					// 	// push(&Job{
-					// 	// 	Priority: 25,
-					// 	// 	Type:     jobField,
-					// 	// 	Object:   obj,
-					// 	// })
-					// case locArg, locArgField:
-					// 	push(nextJob)
-					// 	// push(&Job{
-					// 	// 	Priority: 30,
-					// 	// 	Type:     jobArgField,
-					// 	// 	Object:   obj,
-					// 	// })
-					// }
 				case *RequiredResult:
 					ref := *graphql.TypeRefFromString(r.Type, "")
 					if isKnownOrInferredScalar(r.Type) {
@@ -1699,7 +1704,7 @@ var schemaFuzzCmd = &cobra.Command{
 							continue
 						}
 
-						o, resolved := objCache[rootName]
+						o, resolved := getCached(rootName)
 						if resolved {
 							objKind := fuzzed.Type.RootKind()
 							resolvedKind := o.Type.RootKind()
@@ -1741,16 +1746,7 @@ var schemaFuzzCmd = &cobra.Command{
 				delete(deferResolve, rootName)
 
 				if currentJob.Type == jobField && currentJob.Object.Parent != nil && currentJob.Object.Parent.Type.RootKind() != graphql.KindInterface {
-					push(&Job{
-						Priority: 55,
-						Type:     jobArg,
-						Object:   currentJob.Object,
-					})
-					push(&Job{
-						Priority: 120,
-						Type:     jobRequiredArgs,
-						Object:   currentJob.Object,
-					})
+					pushArgJobs(currentJob.Object)
 				}
 
 				// If there were no fields found, it could be the type isn't an object
@@ -1773,7 +1769,12 @@ var schemaFuzzCmd = &cobra.Command{
 				}
 
 				if rootName != "" {
-					updateCache(rootName, currentJob.Object)
+					_, found := getCached(rootName)
+					if !found {
+						objCache[rootName] = currentJob.Object
+					} else {
+						fmt.Println("[!] Obj already cached!")
+					}
 				}
 
 				if currentJob.Object.Name == rootQuery.Name {
