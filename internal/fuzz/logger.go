@@ -2,6 +2,7 @@ package fuzz
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/NoF0rte/graphqshell/internal/graphql"
 )
@@ -21,6 +22,8 @@ func (l *Logger) path(o *graphql.Object, input string, t string) string {
 		if t != "" {
 			currentPath = fmt.Sprintf("%s %s", currentPath, t)
 		}
+	} else if strings.HasPrefix(currentPath, "(") {
+		currentPath = fmt.Sprintf("%s%s", o.Name, currentPath)
 	} else {
 		currentPath = fmt.Sprintf("%s.%s", o.Name, currentPath)
 	}

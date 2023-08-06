@@ -592,9 +592,9 @@ func Start(client *graphql.Client, words []string, opts ...FuzzOption) (*Results
 		}
 		logger.job = currentJob
 
+		before := time.Now()
 		hadResults := false
 		runner := currentJob.Runner(client, options.threads, combineWords(words))
-		before := time.Now()
 		for result := range runner.Run(currentJob.Object) {
 			hadResults = true
 
@@ -807,11 +807,11 @@ func Start(client *graphql.Client, words []string, opts ...FuzzOption) (*Results
 				}
 
 				if r.Location == locArg {
-					logger.FoundWithType(fuzzed, r.Type)
-					//fmt.Printf("[%s] Found: %s(%s %s)\n", currentJob.Type, objPath(obj, ""), fuzzed.Name, r.Type)
-
 					fuzzed.Parent = nil
 					fuzzed.Caller = obj
+
+					//fmt.Printf("[%s] Found: %s(%s %s)\n", currentJob.Type, objPath(obj, ""), fuzzed.Name, r.Type)
+					logger.FoundWithType(fuzzed, r.Type)
 
 					obj.AddArg(fuzzed)
 

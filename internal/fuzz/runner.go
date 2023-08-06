@@ -29,6 +29,7 @@ func (r *FieldRunner) Run(o *graphql.Object) chan Result {
 	r.target = o
 
 	go func() {
+		words := toChan(r.Words)
 		for i := 0; i < r.Threads; i++ {
 			r.wg.Add(1)
 
@@ -36,7 +37,7 @@ func (r *FieldRunner) Run(o *graphql.Object) chan Result {
 			if len(obj.Args) > 0 {
 				fmt.Println("[!] Copied cache had args")
 			}
-			go r.worker(obj, 1)
+			go r.worker(obj, words, 1)
 		}
 
 		r.wg.Wait()
@@ -60,7 +61,7 @@ func (r *FieldRunner) batchFields(createField func(word string) *graphql.Object,
 	return fields
 }
 
-func (r *FieldRunner) worker(obj *graphql.Object, callCount int) {
+func (r *FieldRunner) worker(obj *graphql.Object, words chan string, callCount int) {
 	defer func() {
 		if callCount == 1 {
 			r.wg.Done()
@@ -96,7 +97,7 @@ func (r *FieldRunner) worker(obj *graphql.Object, callCount int) {
 		matcher = fieldNotDefinedRe
 	}
 
-	words := toChan(r.Words)
+	// words := toChan(r.Words)
 	rootObj := walkObject(obj, directionRoot)
 
 	var retryFields []string
@@ -156,11 +157,8 @@ func (r *FieldRunner) worker(obj *graphql.Object, callCount int) {
 		}
 	}
 
-	if len(retryFields) > 1 {
-		r.Words = retryFields
-
-		callCount++
-		r.worker(obj, callCount)
+	if len(retryFields) > 0 {
+		r.worker(obj, toChan(retryFields), callCount+1)
 	}
 }
 
@@ -247,6 +245,7 @@ func (r *EnumRunner) Run(o *graphql.Object) chan Result {
 	r.target = o
 
 	go func() {
+		words := toChan(r.Words)
 		for i := 0; i < r.Threads; i++ {
 			r.wg.Add(1)
 
@@ -254,7 +253,7 @@ func (r *EnumRunner) Run(o *graphql.Object) chan Result {
 			if len(obj.Args) > 0 {
 				fmt.Println("[!] Copied cache had args")
 			}
-			go r.worker(obj, 1)
+			go r.worker(obj, words, 1)
 		}
 
 		r.wg.Wait()
@@ -264,7 +263,7 @@ func (r *EnumRunner) Run(o *graphql.Object) chan Result {
 	return r.results
 }
 
-func (r *EnumRunner) worker(obj *graphql.Object, callCount int) {
+func (r *EnumRunner) worker(obj *graphql.Object, words chan string, callCount int) {
 	defer func() {
 		if callCount == 1 {
 			r.wg.Done()
@@ -314,7 +313,7 @@ func (r *EnumRunner) worker(obj *graphql.Object, callCount int) {
 
 	rootObj = walkObject(caller, directionRoot)
 
-	words := toChan(r.Words)
+	// words := toChan(r.Words)
 
 	var retryValues []string
 	rootName := obj.Type.RootName()
@@ -350,10 +349,7 @@ func (r *EnumRunner) worker(obj *graphql.Object, callCount int) {
 		}
 
 		if len(retryValues) > 0 {
-			r.Words = retryValues
-
-			callCount++
-			r.worker(obj, callCount)
+			r.worker(obj, toChan(retryValues), callCount+1)
 		}
 	}
 }
@@ -405,6 +401,7 @@ func (r *ArgRunner) Run(o *graphql.Object) chan Result {
 	r.target = o
 
 	go func() {
+		words := toChan(r.Words)
 		for i := 0; i < r.Threads; i++ {
 			r.wg.Add(1)
 
@@ -413,7 +410,7 @@ func (r *ArgRunner) Run(o *graphql.Object) chan Result {
 				{Name: "graphqlshell_field"},
 			}
 
-			go r.worker(obj, 1)
+			go r.worker(obj, words, 1)
 		}
 
 		r.wg.Wait()
@@ -439,14 +436,14 @@ func (r *ArgRunner) batchArgs(words chan string) []*graphql.Object {
 	return args
 }
 
-func (r *ArgRunner) worker(obj *graphql.Object, callCount int) {
+func (r *ArgRunner) worker(obj *graphql.Object, words chan string, callCount int) {
 	defer func() {
 		if callCount == 1 {
 			r.wg.Done()
 		}
 	}()
 
-	words := toChan(r.Words)
+	// words := toChan(r.Words)
 
 	var retryArgs []string
 	for {
@@ -500,10 +497,7 @@ func (r *ArgRunner) worker(obj *graphql.Object, callCount int) {
 	}
 
 	if len(retryArgs) > 0 {
-		r.Words = retryArgs
-
-		callCount++
-		r.worker(obj, callCount)
+		r.worker(obj, toChan(retryArgs), callCount+1)
 	}
 }
 
