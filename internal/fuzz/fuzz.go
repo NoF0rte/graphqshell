@@ -700,7 +700,6 @@ func Start(client *graphql.Client, words []string, opts ...FuzzOption) (*Results
 					nextJob.Type = jobField
 				} else {
 					logger.FoundWithType(obj, r.Type)
-					//fmt.Printf("[%s] Found: %s %s\n", currentJob.Type, objPath(obj, ""), r.Type)
 
 					ref := graphql.TypeRefFromString(r.Type, r.Kind)
 					obj.Type = *ref
@@ -810,7 +809,6 @@ func Start(client *graphql.Client, words []string, opts ...FuzzOption) (*Results
 					fuzzed.Parent = nil
 					fuzzed.Caller = obj
 
-					//fmt.Printf("[%s] Found: %s(%s %s)\n", currentJob.Type, objPath(obj, ""), fuzzed.Name, r.Type)
 					logger.FoundWithType(fuzzed, r.Type)
 
 					obj.AddArg(fuzzed)
@@ -853,7 +851,6 @@ func Start(client *graphql.Client, words []string, opts ...FuzzOption) (*Results
 					})
 				} else {
 					logger.FoundWithType(fuzzed, r.Type)
-					//fmt.Printf("[%s] Found: %s.%s %s\n", currentJob.Type, objPath(obj, ""), fuzzed.Name, r.Type)
 
 					obj.AddField(fuzzed)
 					obj.SetValue(nil)
