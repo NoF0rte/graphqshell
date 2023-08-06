@@ -23,6 +23,12 @@ func (s *ThreadSafeSet) Contains(items ...interface{}) bool {
 	return s.set.Contains(items...)
 }
 
+func (s *ThreadSafeSet) Size() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.set.Size()
+}
+
 func (s *ThreadSafeSet) StringValues() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
