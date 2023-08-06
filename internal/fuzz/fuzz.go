@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/NoF0rte/graphqshell/internal/ds"
 	"github.com/NoF0rte/graphqshell/internal/graphql"
@@ -593,6 +594,7 @@ func Start(client *graphql.Client, words []string, opts ...FuzzOption) (*Results
 
 		hadResults := false
 		runner := currentJob.Runner(client, options.threads, combineWords(words))
+		before := time.Now()
 		for result := range runner.Run(currentJob.Object) {
 			hadResults = true
 
@@ -604,6 +606,8 @@ func Start(client *graphql.Client, words []string, opts ...FuzzOption) (*Results
 					Name:   r.Text,
 					Parent: obj,
 				}
+
+				addFoundWord(fuzzed.Name)
 
 				switch r.Location {
 				case locArg:
@@ -894,6 +898,8 @@ func Start(client *graphql.Client, words []string, opts ...FuzzOption) (*Results
 				}
 			}
 		}
+		diff := time.Since(before)
+		logger.Log("Completed: %fs", diff.Seconds())
 
 		if currentJob.isAnyType(jobField, jobArgField, jobEnum) {
 			resolveStack.Pop()

@@ -97,6 +97,7 @@ func (r *FieldRunner) worker(obj *graphql.Object, callCount int) {
 	}
 
 	words := toChan(r.Words)
+	rootObj := walkObject(obj, directionRoot)
 
 	var retryFields []string
 	for {
@@ -104,8 +105,6 @@ func (r *FieldRunner) worker(obj *graphql.Object, callCount int) {
 		if len(fields) == 0 {
 			break
 		}
-
-		rootObj := walkObject(obj, directionRoot) // move this to before loop?
 
 		obj.Fields = fields
 
@@ -217,8 +216,6 @@ func (r *FieldRunner) process(matcher *regexp.Regexp, word string, resp *graphql
 			}
 
 			r.results <- r.makeResult(field, loc)
-
-			// addFoundWord(field)
 		}
 
 		break
@@ -533,8 +530,6 @@ func (r *ArgRunner) process(word string, resp *graphql.Response) (handled bool, 
 		for _, arg := range matches {
 			found = true
 			r.results <- r.makeResult(arg)
-
-			// addFoundWord(arg)
 		}
 	}
 
