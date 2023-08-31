@@ -193,7 +193,7 @@ var (
 	enumRe         = regexp.MustCompile(`\b[Ee]nums?\b`)
 
 	queryFieldRe = func(name string) *regexp.Regexp {
-		return regexp.MustCompile(fmt.Sprintf(`Cannot query field "%s" on type "(%s)"`, regexp.QuoteMeta(name), graphqlNameRe))
+		return regexp.MustCompile(fmt.Sprintf(`(?:Cannot query )?[Ff]ield ["']%s["'] (?:doesn't exist) on type ["'](%s)["']`, regexp.QuoteMeta(name), graphqlNameRe))
 	}
 	noSubfieldsRe = func(name string) *regexp.Regexp {
 		return regexp.MustCompile(fmt.Sprintf(`Field "%s".*"([^"]+)" has no subfields`, regexp.QuoteMeta(name)))
