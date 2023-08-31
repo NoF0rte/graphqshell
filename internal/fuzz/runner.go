@@ -2,7 +2,6 @@ package fuzz
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 	"sync"
 
@@ -162,7 +161,7 @@ func (r *FieldRunner) worker(obj *graphql.Object, words chan string, callCount i
 	}
 }
 
-func (r *FieldRunner) process(matcher *regexp.Regexp, word string, resp *graphql.Response) (handled bool, found bool, shouldContinue bool) {
+func (r *FieldRunner) process(matchers Regexes, word string, resp *graphql.Response) (handled bool, found bool, shouldContinue bool) {
 	shouldContinue = true
 
 	for _, e := range resp.Result.Errors {
@@ -179,7 +178,7 @@ func (r *FieldRunner) process(matcher *regexp.Regexp, word string, resp *graphql
 			return
 		}
 
-		if !matcher.MatchString(e.Message) {
+		if !matchers.MatchString(e.Message) {
 			continue
 		}
 
@@ -502,13 +501,23 @@ func (r *ArgRunner) worker(obj *graphql.Object, words chan string, callCount int
 }
 
 func (r *ArgRunner) process(word string, resp *graphql.Response) (handled bool, found bool) {
-	unknownArgRe := regexp.MustCompile(fmt.Sprintf(`Unknown argument "%s"`, word))
+	matcher := unknownArgRe(word)
 	for _, e := range resp.Result.Errors {
-		if !unknownArgRe.MatchString(e.Message) {
+		if !matcher.MatchString(e.Message) {
+
+			// Exact match
+			if exactArgMatchRe(word).MatchString(e.Message) {
+				found = true
+				handled = true
+				r.results <- r.makeResult(word)
+				break
+			}
+
 			continue
 		}
 
 		handled = true
+
 		didYouMeanMatches := didYouMeanRe.FindStringSubmatch(e.Message)
 		if len(didYouMeanMatches) == 0 {
 			continue
@@ -525,6 +534,9 @@ func (r *ArgRunner) process(word string, resp *graphql.Response) (handled bool, 
 			found = true
 			r.results <- r.makeResult(arg)
 		}
+
+		// Might want to break after we get here since there shouldn't be
+		// any more matches for this word
 	}
 
 	return
@@ -574,9 +586,9 @@ func (r *FieldTypeRunner) Run(o *graphql.Object) chan Result {
 		}
 
 		for _, e := range resp.Result.Errors {
-			matches := queryFieldRe(name).FindAllStringSubmatch(e.Message, -1)
+			matches := queryFieldRe(name).FindAllStringSubmatch(e.Message)
 			if len(matches) == 0 {
-				matches = noSubfieldsRe(obj.Name).FindAllStringSubmatch(e.Message, -1)
+				matches = noSubfieldsRe(obj.Name).FindAllStringSubmatch(e.Message)
 
 				if len(matches) == 0 {
 					continue
@@ -603,7 +615,7 @@ func (r *FieldTypeRunner) Run(o *graphql.Object) chan Result {
 			}
 
 			for _, e := range resp.Result.Errors {
-				matches := fieldOfTypeRe(obj.Name).FindAllStringSubmatch(e.Message, -1)
+				matches := fieldOfTypeRe(obj.Name).FindAllStringSubmatch(e.Message)
 				if len(matches) == 0 {
 					continue
 				}

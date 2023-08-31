@@ -186,20 +186,30 @@ var (
 	rootMutation *graphql.Object
 
 	nonEnumValueRe = regexp.MustCompile(`Enum "[^"]+" cannot represent non-enum value: (.*)\.`)
-	didYouMeanRe   = regexp.MustCompile(`Did you mean(?: the enum value| to use an inline fragment on)? (.*)\?$`)
+	didYouMeanRe   = regexp.MustCompile(`Did you mean(?: the enum value| to use an inline fragment on)? (.*)\?`)
 	graphqlRe      = regexp.MustCompile(graphqlNameRe)
 	orRe           = regexp.MustCompile(" or ")
 	nonScalarRe    = regexp.MustCompile(`(non-?string)|(non-?integer)|(must be a string)`)
 	enumRe         = regexp.MustCompile(`\b[Ee]nums?\b`)
 
-	queryFieldRe = func(name string) *regexp.Regexp {
-		return regexp.MustCompile(fmt.Sprintf(`(?:Cannot query )?[Ff]ield ["']%s["'] (?:doesn't exist) on type ["'](%s)["']`, regexp.QuoteMeta(name), graphqlNameRe))
+	queryFieldRe = func(name string) Regexes {
+		return Regexes{
+			regexp.MustCompile(fmt.Sprintf(`Cannot query field ["']%s["'] on type ["'](%s)["']`, regexp.QuoteMeta(name), graphqlNameRe)),
+			regexp.MustCompile(fmt.Sprintf(`Field ["']%s["'] doesn't exist on type ["'](%s)["']`, regexp.QuoteMeta(name), graphqlNameRe)),
+			regexp.MustCompile(fmt.Sprintf(`field ["']%s["'] returns (%s) but has no selections`, regexp.QuoteMeta(name), graphqlNameRe)),
+		}
 	}
-	noSubfieldsRe = func(name string) *regexp.Regexp {
-		return regexp.MustCompile(fmt.Sprintf(`Field "%s".*"([^"]+)" has no subfields`, regexp.QuoteMeta(name)))
+	noSubfieldsRe = func(name string) Regexes {
+		return Regexes{
+			regexp.MustCompile(fmt.Sprintf(`Field "%s".*"([^"]+)" has no subfields`, regexp.QuoteMeta(name))),
+			regexp.MustCompile(fmt.Sprintf(`field ["']%s["'] returns (%s) but has selections \[%s\]`, regexp.QuoteMeta(name), graphqlNameRe, regexp.QuoteMeta(name))),
+		}
 	}
-	fieldOfTypeRe = func(name string) *regexp.Regexp {
-		return regexp.MustCompile(fmt.Sprintf(`Field \"%s\" of type \"([^"]+)\"`, regexp.QuoteMeta(name)))
+	fieldOfTypeRe = func(name string) Regexes {
+		return Regexes{
+			regexp.MustCompile(fmt.Sprintf(`Field \"%s\" of type \"([^"]+)\"`, regexp.QuoteMeta(name))),
+			regexp.MustCompile(fmt.Sprintf(`field ["']%s["'] returns (%s)`, regexp.QuoteMeta(name), graphqlNameRe)),
+		}
 	}
 	requiredArgRe = func(name string) *regexp.Regexp {
 		return regexp.MustCompile(fmt.Sprintf(`Field "%s" argument "(%s)" of type "([^"]+)" is required`, regexp.QuoteMeta(name), graphqlNameRe))
@@ -207,8 +217,10 @@ var (
 	requiredArgFieldRe = func(t string) *regexp.Regexp {
 		return regexp.MustCompile(fmt.Sprintf(`Field "?%s\.(%s)"? of required type "?(.*?)"? was not provided`, regexp.QuoteMeta(t), graphqlNameRe))
 	}
-	fieldNotDefinedRe = func(name string) *regexp.Regexp {
-		return regexp.MustCompile(fmt.Sprintf(`Field "%s" is not defined by %s`, regexp.QuoteMeta(name), graphqlNameRe))
+	fieldNotDefinedRe = func(name string) Regexes {
+		return Regexes{
+			regexp.MustCompile(fmt.Sprintf(`Field "%s" is not defined by %s`, regexp.QuoteMeta(name), graphqlNameRe)),
+		}
 	}
 	expectedTypeRe = func(name string) *regexp.Regexp {
 		return regexp.MustCompile(fmt.Sprintf("Expected type ([^,]+), found %s", regexp.QuoteMeta(name)))
@@ -221,6 +233,17 @@ var (
 			regexp.MustCompile(fmt.Sprintf(`Value "%s" does not exist in "[^"]+" enum`, regexp.QuoteMeta(name)))
 		}
 		return regexp.MustCompile(fmt.Sprintf(`Value "%s" does not exist in "%s" enum`, regexp.QuoteMeta(name), regexp.QuoteMeta(t)))
+	}
+	unknownArgRe = func(name string) Regexes {
+		return Regexes{
+			regexp.MustCompile(fmt.Sprintf(`Unknown argument "%s"`, name)),
+			regexp.MustCompile(fmt.Sprintf(`Field ['"]%s['"] doesn't accept argument ['"]%s['"]`, graphqlNameRe, regexp.QuoteMeta(name))),
+		}
+	}
+	exactArgMatchRe = func(name string) Regexes {
+		return Regexes{
+			regexp.MustCompile(fmt.Sprintf(`Argument ['"]%s['"] on Field ['"]%s['"] has an invalid value`, name, graphqlNameRe)),
+		}
 	}
 )
 
